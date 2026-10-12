@@ -25,6 +25,8 @@
 1. 标书写「i7-14700K，14 核 20 线程」。实际 14700K 为 20 核 28 线程；14C/20T 是 i5-14600K 规格，系笔误。按 14700K 实机交付（20C/28T ≥ 14C/20T，正偏离）。
 2. 标书要求双端运行截图；应答文本写「Mac M4」，实际到货为 M5。对外物料统一措辞「Apple Silicon」并与实物一致。
 
+**打样环境**（M1 原型，2026-10-12 起）：开发机 RTX 4070 12GB / WSL2，与目标机 3060 12GB 同显存档；复用本机 ComfyUI v0.39.0（`/data/github/ComfyUI`，含 GGUF/KJNodes 节点，模型库已就位：Qwen-Image 2.1 Turbo int8 + qwen3vl-4b 编码器 + LTX 2.3 + MiniMax H3）。引擎适配器支持 **attach 模式**（接管已在运行的实例）与 managed 模式（自拉子进程），打样用 attach。
+
 ## 2. 核心决策
 
 | # | 决策 | 理由 |
@@ -191,7 +193,7 @@ data/
 |---|---|---|
 | 控制面 | Python 3.11 + FastAPI + uvicorn | 单进程；WebSocket 进度 |
 | 存储 | SQLite（WAL）+ 文件系统 | 单机规模，明确不上 PG |
-| 前端 | Vue3 + Element Plus + Vite | 管理端组件生态成熟 |
+| 前端 | React 18 + Vite + TypeScript + Ant Design | 管理端组件生态成熟（2026-10-12 更新：由 Vue3 方案变更，负责人指定） |
 | 执行面 | ComfyUI（pin 版本）+ vendored custom nodes | 核心原生支持目标模型族 |
 | 量化 | ComfyUI-GGUF 等社区节点（pin） | CUDA/MPS 双端可用 |
 | LLM | Qwen3-4B GGUF（llama.cpp 系节点/运行时） | Agent 拆解 |
