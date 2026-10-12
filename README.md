@@ -25,6 +25,11 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8090
 种子账号：`admin/admin123`、`student1/stu123`、`student2/stu123`。
 `GET /api/templates` 的 `missing_models` 为空即模型齐备，可直接提交任务。
 
+### 前端
+
+- **单进程模式**（演示用）：`cd frontend && npm run build` 会产出到 `backend/frontend_dist/`，FastAPI 自动挂载，`http://127.0.0.1:8090/` 即完整界面。
+- **开发模式**：`cd frontend && npm run dev`，访问 `http://localhost:5173`，`/api`、`/files`、`/ws` 已代理到 8090。
+
 ## 测试
 
 ```bash
