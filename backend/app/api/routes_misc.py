@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+from pydantic_core import PydanticUndefined
 
 from app.auth import parse_token
 from app.compiler.templates import TEMPLATES, validate_models
@@ -7,12 +8,19 @@ from app.schemas import TemplateOut
 router = APIRouter(prefix="/api")
 
 
+def _field_defaults(params_model) -> dict:
+    return {
+        name: (None if f.default is PydanticUndefined else f.default)
+        for name, f in params_model.model_fields.items()
+    }
+
+
 @router.get("/templates", response_model=list[TemplateOut])
 async def templates(request: Request) -> list[TemplateOut]:
     missing = await validate_models(request.app.state.engine)
     return [
         TemplateOut(id=t.id, name=t.name, capability=t.capability,
-                    defaults=t.params_model().model_dump(), missing_models=missing)
+                    defaults=_field_defaults(t.params_model), missing_models=missing)
         for t in TEMPLATES.values()
     ]
 

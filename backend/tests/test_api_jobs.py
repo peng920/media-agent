@@ -37,6 +37,15 @@ def test_health(client):
     assert r.json()["engine"] is True
 
 
+def test_templates_endpoint(client):
+    r = client.get("/api/templates")
+    assert r.status_code == 200
+    data = r.json()
+    assert data[0]["id"] == "qwen-image-2.1-turbo"
+    assert data[0]["defaults"]["width"] == 1024
+    assert data[0]["defaults"]["prompt"] is None
+
+
 def test_login_me_and_unauthorized(client):
     h = _login(client)
     assert client.get("/api/auth/me", headers=h).json()["username"] == "student1"
