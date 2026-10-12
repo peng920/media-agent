@@ -1,6 +1,6 @@
 data/
 logs/
-engine/
+/engine/
 __pycache__/
 *.pyc
 .venv/
