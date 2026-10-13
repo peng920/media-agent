@@ -31,6 +31,7 @@ export default function Create() {
   }, [])
 
   const missing = selected?.missing_models ?? []
+  const missingOptional = selected?.missing_optional_models ?? []
 
   const onFinish = async (v: FormValues) => {
     setSubmitting(true)
@@ -54,11 +55,20 @@ export default function Create() {
     <Card title="创作" style={{ maxWidth: 860 }}>
       {missing.length > 0 && (
         <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="引擎缺少必需模型文件，暂不能提交"
+          description={missing.join('、')}
+        />
+      )}
+      {missing.length === 0 && missingOptional.length > 0 && (
+        <Alert
           type="warning"
           showIcon
           style={{ marginBottom: 16 }}
-          message="引擎缺少以下模型文件，任务将被拒绝"
-          description={missing.join('、')}
+          message="可选模型缺失（关闭对应开关即可正常提交）"
+          description={missingOptional.join('、')}
         />
       )}
       <Form

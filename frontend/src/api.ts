@@ -4,6 +4,7 @@ export interface TemplateItem {
   capability: string
   defaults: Record<string, unknown>
   missing_models: string[]
+  missing_optional_models?: string[]
 }
 
 export interface JobOutput {
