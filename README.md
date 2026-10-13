@@ -9,11 +9,15 @@
 1. 本机 ComfyUI 已运行于 `http://127.0.0.1:8188`（打样为 attach 模式，控制面不管理引擎进程）。
 2. 模型就位（`/data/github/ComfyUI/models/`）：
    - `diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors`
-   - `text_encoders/qwen3vl_8b_int8_convrot.safetensors` ← **需手动下载**
-     `https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3vl_8b_int8_convrot.safetensors`
-     （ModelScope 镜像：Comfy-Org/Qwen-Image-2.1 同路径）
+   - `text_encoders/` 任一 8B 编码器（模板自动适配，按显存从省到奢）：
+     `qwen3vl_8b_w4a8.safetensors`（5.9G，推荐 12G 卡）/
+     `qwen3vl_8b_int8_convrot.safetensors`（8.7G）/
+     `qwen3vl_8b_bf16.safetensors`（16.3G）
+     下载：`https://hf-mirror.com/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3vl_8b_w4a8.safetensors`
    - `vae/qwen_image_2.1_vae_bf16.safetensors`
-   - `loras/Qwen-Image-2.1-viggle-turbo-v0.3-6step-lora-r128.safetensors`
+   - `loras/`（可选，缺失时创作页关掉 Turbo LoRA 即可）：
+     官方 `qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors`（871M）
+     `https://hf-mirror.com/Comfy-Org/Qwen-Image-2.1/resolve/main/loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors`
 
 ## 启动
 
