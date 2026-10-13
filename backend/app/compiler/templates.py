@@ -15,19 +15,25 @@ class QwenT2IParams(BaseModel):
 
 # 2026-10-12 真机校准结论：qwen_image_2.1_turbo 需 4096 维文本特征（qwen3vl_8b），
 # 盘上 qwen3vl_4b（2560 维）会报 normalized_shape 不匹配。
+# 8B 编码器接受任一官方量化变体，按显存占用从省到奢排序。
 UNET = "qwen_image_2.1_turbo_int8_convrot.safetensors"
-TE = "qwen3vl_8b_int8_convrot.safetensors"
+TE_CANDIDATES = [
+    "qwen3vl_8b_w4a8.safetensors",
+    "qwen3vl_8b_int8_convrot.safetensors",
+    "qwen3vl_8b_bf16.safetensors",
+]
 VAE = "qwen_image_2.1_vae_bf16.safetensors"
 LORA = "Qwen-Image-2.1-viggle-turbo-v0.3-6step-lora-r128.safetensors"
 
 
-def build_qwen_t2i(p: QwenT2IParams) -> dict:
+def build_qwen_t2i(p: QwenT2IParams, overrides: dict | None = None) -> dict:
     seed = p.seed if p.seed is not None else random.randint(0, 2**48)
+    te = (overrides or {}).get("clip_name", TE_CANDIDATES[0])
     model_src = ["1", 0]
     g: dict = {
         "1": {"class_type": "UNETLoader",
               "inputs": {"unet_name": UNET, "weight_dtype": "default"}},
-        "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": TE, "type": "qwen_image"}},
+        "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": te, "type": "qwen_image"}},
         "3": {"class_type": "VAELoader", "inputs": {"vae_name": VAE}},
         "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": p.prompt}},
         "6": {"class_type": "EmptySD3LatentImage",
@@ -49,12 +55,28 @@ def build_qwen_t2i(p: QwenT2IParams) -> dict:
 
 
 class Template:
-    def __init__(self, id, name, capability, params_model, builder, required_models):
+    def __init__(self, id, name, capability, params_model, builder, required_models,
+                 resolver=None, optional_models=None):
         self.id, self.name, self.capability = id, name, capability
         self.params_model, self.builder, self.required_models = params_model, builder, required_models
+        self.optional_models = optional_models or {}
+        self._resolver = resolver  # async (engine) -> {"节点入参名": 文件名}
 
-    def build(self, params: BaseModel) -> dict:
-        return self.builder(params)
+    def build(self, params: BaseModel, overrides: dict | None = None) -> dict:
+        return self.builder(params, overrides)
+
+    async def resolve_overrides(self, engine) -> dict:
+        return await self._resolver(engine) if self._resolver else {}
+
+
+async def _resolve_te(engine) -> dict:
+    opts = await engine.model_options("CLIPLoader", "clip_name")
+    for cand in TE_CANDIDATES:
+        if cand in opts:
+            return {"clip_name": cand}
+    raise RuntimeError(
+        "缺少 Qwen-Image 2.1 文本编码器（qwen3vl_8b_w4a8 / int8_convrot / bf16 任一），"
+        "请放入 engine 的 text_encoders 目录")
 
 
 QWEN_T2I = Template(
@@ -65,8 +87,12 @@ QWEN_T2I = Template(
     builder=build_qwen_t2i,
     required_models={
         "UNETLoader": {"unet_name": UNET},
-        "CLIPLoader": {"clip_name": TE},
+        "CLIPLoader": {"clip_name": TE_CANDIDATES},
         "VAELoader": {"vae_name": VAE},
+    },
+    resolver=_resolve_te,
+    optional_models={
+        # LoRA 缺失时关掉 use_lora 仍可生成，故列为可选
         "LoraLoaderModelOnly": {"lora_name": LORA},
     },
 )
@@ -74,17 +100,26 @@ QWEN_T2I = Template(
 TEMPLATES: dict[str, Template] = {QWEN_T2I.id: QWEN_T2I}
 
 
-async def validate_models(engine) -> list[str]:
-    """对照引擎各加载节点的下拉清单，返回缺失的模型文件名列表；空列表=齐备。"""
+async def _check_group(engine, groups: dict) -> list[str]:
     missing = []
-    for tpl in TEMPLATES.values():
-        for node, fields in tpl.required_models.items():
-            for field, expected in fields.items():
-                try:
-                    opts = await engine.model_options(node, field)
-                except Exception as e:
-                    missing.append(f"{expected}（无法查询引擎: {e}）")
-                    continue
-                if expected not in opts:
-                    missing.append(expected)
+    for node, fields in groups.items():
+        for field, expected in fields.items():
+            cands = expected if isinstance(expected, list) else [expected]
+            try:
+                opts = await engine.model_options(node, field)
+            except Exception as e:
+                missing.append(f"{'/'.join(cands)}（无法查询引擎: {e}）")
+                continue
+            if not any(c in opts for c in cands):
+                missing.append(" 或 ".join(cands))
     return missing
+
+
+async def validate_models(engine) -> dict:
+    """返回 {"required": [...], "optional": [...]}；required 为空才允许任务提交。"""
+    required: list[str] = []
+    optional: list[str] = []
+    for tpl in TEMPLATES.values():
+        required += await _check_group(engine, tpl.required_models)
+        optional += await _check_group(engine, tpl.optional_models)
+    return {"required": required, "optional": optional}

@@ -33,4 +33,5 @@ class TemplateOut(BaseModel):
     name: str
     capability: str
     defaults: dict
-    missing_models: list[str]
+    missing_models: list[str]          # 必需缺失 → 禁止提交
+    missing_optional_models: list[str] = []  # 可选缺失 → 仅提示

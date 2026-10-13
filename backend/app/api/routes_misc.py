@@ -17,10 +17,12 @@ def _field_defaults(params_model) -> dict:
 
 @router.get("/templates", response_model=list[TemplateOut])
 async def templates(request: Request) -> list[TemplateOut]:
-    missing = await validate_models(request.app.state.engine)
+    report = await validate_models(request.app.state.engine)
     return [
         TemplateOut(id=t.id, name=t.name, capability=t.capability,
-                    defaults=_field_defaults(t.params_model), missing_models=missing)
+                    defaults=_field_defaults(t.params_model),
+                    missing_models=report["required"],
+                    missing_optional_models=report["optional"])
         for t in TEMPLATES.values()
     ]
 

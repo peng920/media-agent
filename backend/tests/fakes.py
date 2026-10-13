@@ -28,7 +28,12 @@ class FakeEngine:
         return {"system": {"comfyui_version": "0.39.0-test"}}
 
     async def model_options(self, node, field):
-        return []
+        # 与 app.compiler.templates 的模型清单对齐；LoRA 故意缺席 → 可选缺失路径
+        return {
+            ("CLIPLoader", "clip_name"): ["qwen3vl_8b_w4a8.safetensors"],
+            ("UNETLoader", "unet_name"): ["qwen_image_2.1_turbo_int8_convrot.safetensors"],
+            ("VAELoader", "vae_name"): ["qwen_image_2.1_vae_bf16.safetensors"],
+        }.get((node, field), [])
 
 
 class FailingEngine(FakeEngine):

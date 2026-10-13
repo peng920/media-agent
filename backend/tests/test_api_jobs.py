@@ -44,6 +44,8 @@ def test_templates_endpoint(client):
     assert data[0]["id"] == "qwen-image-2.1-turbo"
     assert data[0]["defaults"]["width"] == 1024
     assert data[0]["defaults"]["prompt"] is None
+    assert data[0]["missing_models"] == []          # FakeEngine 提供了 w4a8
+    assert len(data[0]["missing_optional_models"]) == 1  # LoRA 不在场，仅提示
 
 
 def test_login_me_and_unauthorized(client):

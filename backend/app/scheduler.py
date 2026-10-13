@@ -72,7 +72,8 @@ class Scheduler:
             tpl = TEMPLATES[job.template_id]
             params = tpl.params_model(**json.loads(job.params))
         try:
-            graph = tpl.build(params)
+            overrides = await tpl.resolve_overrides(self.engine)
+            graph = tpl.build(params, overrides)
             prompt_id = await self.engine.submit(graph, client_id=str(uuid.uuid4()))
             job = self._patch(job_id, status=JobStatus.RUNNING, prompt_id=prompt_id,
                               started_at=utcnow(), progress=0.0)
