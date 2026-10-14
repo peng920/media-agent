@@ -1,7 +1,8 @@
 import pytest
 
 from app.compiler.templates import (TEMPLATES, QwenT2IParams, build_qwen_t2i,
-                                    LtxI2VParams, build_ltx_i2v, validate_models)
+                                    LtxI2VParams, build_ltx_i2v,
+                                    Ltx2bI2VParams, build_ltx_2b_i2v, validate_models)
 
 
 def test_build_with_lora():
@@ -55,10 +56,9 @@ async def test_validate_models_reports_missing():
 
 
 def _full_opts():
-    """两个模板全部必需条目在场的选项表（LoRA 除外，用于可选路径测试）。"""
-    from app.compiler.templates import QWEN_T2I, LTX_I2V
-    opts = {}
-    for tpl in (QWEN_T2I, LTX_I2V):
+    """全部模板的必需条目在场的选项表（LoRA 除外，用于可选路径测试）。"""
+    opts: dict = {}
+    for tpl in TEMPLATES.values():
         for n, f, v in tpl.required_models:
             opts.setdefault((n, f), [])
             opts[(n, f)] += v if isinstance(v, list) else [v]
@@ -96,6 +96,40 @@ def test_build_ltx_gemma_override():
     g = build_ltx_i2v(LtxI2VParams(prompt="x", image="i.png"),
                       {"clip_name1": "gemma-3-12b-it-qat-Q8_0.gguf"})
     assert g["2"]["inputs"]["clip_name1"] == "gemma-3-12b-it-qat-Q8_0.gguf"
+
+
+def test_build_ltx_2b():
+    p = Ltx2bI2VParams(prompt="a bird flying", image="zimg_1_x.png")
+    g = build_ltx_2b_i2v(p)
+    assert g["2"]["class_type"] == "CLIPLoaderGGUF"      # gguf TE 走 GGUF 加载器
+    assert g["2"]["inputs"]["type"] == "ltxv"
+    assert g["11"]["inputs"]["cfg"] == 1.0                # 蒸馏档默认
+    assert g["17"]["class_type"] == "SaveVideo"
+    assert "18" not in g                                  # 无音频路径
+
+
+def test_build_ltx_2b_safetensors_te_switch():
+    g = build_ltx_2b_i2v(Ltx2bI2VParams(prompt="x", image="i.png"),
+                         {"clip_name": "t5xxl_fp8_safetensors.safetensors",
+                          "vae_name": "diffusion_pytorch_model.safetensors"})
+    assert g["2"]["class_type"] == "CLIPLoader"           # safetensors 切回普通加载器
+    assert g["3"]["inputs"]["vae_name"] == "diffusion_pytorch_model.safetensors"
+
+
+def test_ltx_2b_param_validation():
+    with pytest.raises(Exception):
+        Ltx2bI2VParams(prompt="x", image="i.png", length=24)  # 非 8n+1
+    with pytest.raises(Exception):
+        Ltx2bI2VParams(prompt="x", image="i.png", strength=1.5)
+
+
+async def test_resolve_2b_te_fallback_to_safetensors():
+    from app.compiler.templates import TEMPLATES
+    engine = FakeEngine({("CLIPLoaderGGUF", "clip_name"): [],
+                         ("CLIPLoader", "clip_name"): ["t5xxl_fp8_safetensors.safetensors"],
+                         ("VAELoader", "vae_name"): ["ltxv_vae.safetensors"]})
+    ov = await TEMPLATES["ltx-2b-i2v-distilled"].resolve_overrides(engine)
+    assert ov["clip_name"] == "t5xxl_fp8_safetensors.safetensors"
 
 
 def test_ltx_param_validation():

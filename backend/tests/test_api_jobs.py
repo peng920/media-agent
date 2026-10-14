@@ -23,7 +23,7 @@ def test_templates_endpoint(client):
     r = client.get("/api/templates")
     assert r.status_code == 200
     data = r.json()
-    assert len(data) == 2
+    assert len(data) == 3
     by_id = {t["id"]: t for t in data}
     qwen = by_id["qwen-image-2.1-turbo"]
     assert qwen["defaults"]["width"] == 1024
@@ -34,6 +34,9 @@ def test_templates_endpoint(client):
     assert ltx["capability"] == "image-to-video"
     assert ltx["missing_models"] == []                # FakeEngine 全量提供
     assert ltx["defaults"]["length"] == 25
+    ltx2b = by_id["ltx-2b-i2v-distilled"]
+    assert ltx2b["missing_models"] == []
+    assert ltx2b["defaults"]["steps"] == 8 and ltx2b["defaults"]["cfg"] == 1.0
 
 
 def test_submit_and_isolation(client):

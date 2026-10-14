@@ -37,8 +37,11 @@ class FakeEngine:
         # 与 app.compiler.templates 的模型清单对齐；LoRA 故意缺席 → 可选缺失路径
         return {
             ("CLIPLoader", "clip_name"): ["qwen3vl_8b_w4a8.safetensors"],
-            ("UNETLoader", "unet_name"): ["qwen_image_2.1_turbo_int8_convrot.safetensors"],
-            ("VAELoader", "vae_name"): ["qwen_image_2.1_vae_bf16.safetensors"],
+            ("CLIPLoaderGGUF", "clip_name"): ["t5-v1_1-xxl-encoder-Q4_K_M.gguf"],
+            ("UNETLoader", "unet_name"): ["qwen_image_2.1_turbo_int8_convrot.safetensors",
+                                          "ltxv-2b-0.9.6-distilled-04-25.safetensors"],
+            ("VAELoader", "vae_name"): ["qwen_image_2.1_vae_bf16.safetensors",
+                                        "ltxv_vae.safetensors"],
             ("UnetLoaderGGUF", "unet_name"): ["ltx-2.3-22b-dev-Q3_K_S.gguf"],
             ("DualCLIPLoaderGGUF", "clip_name1"): ["gemma-3-12b-it-qat-UD-Q4_K_XL.gguf"],
             ("DualCLIPLoaderGGUF", "clip_name2"):

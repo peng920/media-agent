@@ -240,3 +240,123 @@ LTX_I2V = Template(
 )
 
 TEMPLATES: dict[str, Template] = {QWEN_T2I.id: QWEN_T2I, LTX_I2V.id: LTX_I2V}
+
+
+# ============ LTX-Video 2B 0.9.6 distilled 图生视频（低显存档，无音频） ============
+
+class Ltx2bI2VParams(BaseModel):
+    prompt: str = Field(min_length=1, max_length=8000)
+    image: str = Field(min_length=1)
+    width: int = Field(default=768, ge=256, le=1920, multiple_of=32)
+    height: int = Field(default=512, ge=256, le=1920, multiple_of=32)
+    length: int = Field(default=97, ge=9, le=121)
+    steps: int = Field(default=8, ge=1, le=60)         # 蒸馏版 8 步
+    cfg: float = Field(default=1.0, ge=1.0, le=10.0)   # 蒸馏版 cfg=1
+    fps: float = Field(default=24.0, ge=8.0, le=60.0)
+    strength: float = Field(default=1.0, ge=0.0, le=1.0)
+    seed: int | None = None
+
+    @field_validator("length")
+    @classmethod
+    def _length_8n1(cls, v: int) -> int:
+        if (v - 1) % 8 != 0:
+            raise ValueError("帧数须为 8n+1（如 25/49/97）")
+        return v
+
+LTXV_2B = "ltxv-2b-0.9.6-distilled-04-25.safetensors"
+LTXV_VAE_CANDS = ["ltxv_vae.safetensors",
+                  "diffusion_pytorch_model.safetensors",
+                  "ltxv_vae-04-25.safetensors"]
+T5_GGUF_CANDS = [
+    "t5-v1_1-xxl-encoder-Q4_K_M.gguf",
+    "t5-v1_1-xxl-encoder-Q5_K_M.gguf",
+    "t5-v1_1-xxl-encoder-Q6_K.gguf",
+    "t5-v1_1-xxl-encoder-Q8_0.gguf",
+    "t5xxl_fp8_safetensors.gguf",
+]
+LTX2B_NEGATIVE = ("worst quality, inconsistent motion, blurry, jittery, "
+                  "distorted, watermark, text")
+
+
+def build_ltx_2b_i2v(p: Ltx2bI2VParams, overrides: dict | None = None) -> dict:
+    ov = overrides or {}
+    te = ov.get("clip_name", T5_GGUF_CANDS[0])
+    vae = ov.get("vae_name", LTXV_VAE_CANDS[0])
+    te_node = "CLIPLoaderGGUF" if te.endswith(".gguf") else "CLIPLoader"
+    seed = p.seed if p.seed is not None else random.randint(0, 2**48)
+    return {
+        "1": {"class_type": "UNETLoader",
+              "inputs": {"unet_name": LTXV_2B, "weight_dtype": "default"}},
+        "2": {"class_type": te_node, "inputs": {"clip_name": te, "type": "ltxv"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
+        "4": {"class_type": "LoadImage", "inputs": {"image": p.image}},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": p.prompt}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": LTX2B_NEGATIVE}},
+        "7": {"class_type": "LTXVConditioning",
+              "inputs": {"positive": ["5", 0], "negative": ["6", 0], "frame_rate": p.fps}},
+        "8": {"class_type": "LTXVImgToVideo",
+              "inputs": {"positive": ["7", 0], "negative": ["7", 1], "vae": ["3", 0],
+                         "image": ["4", 0], "width": p.width, "height": p.height,
+                         "length": p.length, "batch_size": 1, "strength": p.strength}},
+        "9": {"class_type": "EmptyLTXVLatentVideo",
+              "inputs": {"width": p.width, "height": p.height, "length": p.length,
+                         "batch_size": 1}},
+        "10": {"class_type": "LTXVScheduler",
+               "inputs": {"steps": p.steps, "max_shift": 2.05, "base_shift": 0.95,
+                          "stretch": True, "terminal": 0.1}},
+        "11": {"class_type": "CFGGuider",
+               "inputs": {"model": ["1", 0], "positive": ["8", 0], "negative": ["8", 1],
+                          "cfg": p.cfg}},
+        "12": {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}},
+        "13": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+        "14": {"class_type": "SamplerCustomAdvanced",
+               "inputs": {"noise": ["12", 0], "guider": ["11", 0], "sampler": ["13", 0],
+                          "sigmas": ["10", 0], "latent_image": ["9", 0]}},
+        "15": {"class_type": "VAEDecodeTiled",
+               "inputs": {"samples": ["14", 0], "vae": ["3", 0], "tile_size": 512,
+                          "overlap": 64, "temporal_size": 4096, "temporal_overlap": 8}},
+        "16": {"class_type": "CreateVideo", "inputs": {"images": ["15", 0], "fps": p.fps}},
+        "17": {"class_type": "SaveVideo",
+               "inputs": {"video": ["16", 0], "filename_prefix": "zimg", "format": "mp4",
+                          "codec": "auto"}},
+    }
+
+
+T5_SF_CANDS = ["t5xxl_fp8_safetensors.safetensors", "t5xxl_fp16.safetensors",
+               "t5xxl_fp16.safetensors.3"]
+
+
+async def _resolve_2b_te_vae(engine) -> dict:
+    ov: dict = {}
+    gguf_opts = await engine.model_options("CLIPLoaderGGUF", "clip_name")
+    te = next((c for c in T5_GGUF_CANDS if c in gguf_opts), None)
+    if te is None:
+        sf_opts = await engine.model_options("CLIPLoader", "clip_name")
+        te = next((c for c in T5_SF_CANDS if c in sf_opts), None)
+    if te is None:
+        raise RuntimeError("缺少 T5-XXL 文本编码器（t5-v1_1-xxl-encoder-Q4_K_M.gguf 推荐），"
+                           "请放入 engine 的 text_encoders 目录")
+    ov["clip_name"] = te
+    vae_opts = await engine.model_options("VAELoader", "vae_name")
+    vae = next((c for c in LTXV_VAE_CANDS if c in vae_opts), None)
+    if vae is None:
+        raise RuntimeError("缺少 LTX 2B VAE（ltxv_vae.safetensors），请放入 vae 目录")
+    ov["vae_name"] = vae
+    return ov
+
+
+LTX_2B_I2V = Template(
+    id="ltx-2b-i2v-distilled",
+    name="LTX-Video 2B 蒸馏版 图生视频（低显存）",
+    capability="image-to-video",
+    params_model=Ltx2bI2VParams,
+    builder=build_ltx_2b_i2v,
+    required_models=[
+        ("UNETLoader", "unet_name", LTXV_2B),
+        ("CLIPLoaderGGUF", "clip_name", T5_GGUF_CANDS),
+        ("VAELoader", "vae_name", LTXV_VAE_CANDS),
+    ],
+    resolver=_resolve_2b_te_vae,
+)
+
+TEMPLATES[LTX_2B_I2V.id] = LTX_2B_I2V

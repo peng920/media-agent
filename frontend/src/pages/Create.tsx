@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Alert, Button, Card, Col, Form, Input, InputNumber, message, Row, Select, Switch,
   Upload,
@@ -25,12 +25,16 @@ export default function Create() {
   const [templates, setTemplates] = useState<TemplateItem[]>([])
   const [selected, setSelected] = useState<TemplateItem | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [form] = Form.useForm<FormValues>()
+  const formRef = useRef(form)
 
   useEffect(() => {
     listTemplates()
       .then((ts) => {
         setTemplates(ts)
-        setSelected(ts[0] ?? null)
+        const first = ts[0] ?? null
+        setSelected(first)
+        if (first) applyDefaults(formRef.current, first)
       })
       .catch((e) => message.error((e as Error).message))
   }, [])
@@ -38,6 +42,20 @@ export default function Create() {
   const missing = selected?.missing_models ?? []
   const missingOptional = selected?.missing_optional_models ?? []
   const isVideo = selected?.capability === 'image-to-video'
+
+  function applyDefaults(f: { setFieldsValue: (v: Partial<FormValues>) => void },
+                         t: TemplateItem) {
+    const d = t.defaults as Record<string, unknown>
+    f.setFieldsValue({
+      width: (d.width as number) ?? 1024,
+      height: (d.height as number) ?? 1024,
+      steps: (d.steps as number) ?? 6,
+      length: (d.length as number) ?? 25,
+      cfg: (d.cfg as number) ?? 3.0,
+      use_lora: (d.use_lora as boolean) ?? true,
+      image: undefined,
+    })
+  }
 
   const onFinish = async (v: FormValues) => {
     setSubmitting(true)
@@ -85,6 +103,7 @@ export default function Create() {
         />
       )}
       <Form
+        form={form}
         layout="vertical"
         onFinish={onFinish}
         key={selected?.id ?? 'none'}
@@ -102,7 +121,11 @@ export default function Create() {
           <Select
             options={templates.map((t) => ({ value: t.id, label: t.name }))}
             value={selected?.id}
-            onChange={(id) => setSelected(templates.find((t) => t.id === id) ?? null)}
+            onChange={(id) => {
+              const t = templates.find((x) => x.id === id) ?? null
+              setSelected(t)
+              if (t) applyDefaults(form, t)
+            }}
           />
         </Form.Item>
         {isVideo && (
