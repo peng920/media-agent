@@ -4,7 +4,7 @@ from app.compiler.templates import (TEMPLATES, QwenT2IParams, build_qwen_t2i,
                                     LtxI2VParams, build_ltx_i2v,
                                     Ltx2bI2VParams, build_ltx_2b_i2v,
                                     WanT2VParams, build_wan_t2v,
-                                    FastHYT2VParams, build_fasthy_t2v,
+                                    Hy15I2VParams, build_hy15_i2v,
                                     ZImageTurboParams, build_zimage_turbo,
                                     Flux2KleinParams, build_flux2_klein,
                                     validate_models)
@@ -140,15 +140,22 @@ def test_build_wan_t2v():
     assert g["11"]["class_type"] == "SaveVideo"
 
 
-def test_build_fasthy_t2v():
-    g = build_fasthy_t2v(FastHYT2VParams(prompt="ocean waves at sunset"))
-    assert g["1"]["class_type"] == "UnetLoaderGGUF"
-    assert g["2"]["class_type"] == "DualCLIPLoader"   # clip_l + llava 双编码器
-    assert g["2"]["inputs"]["type"] == "hunyuan_video"
-    assert g["2"]["inputs"]["clip_name1"] == "clip_l.safetensors"
-    assert g["2"]["inputs"]["clip_name2"] == "llava_llama3_fp8_scaled.safetensors"
-    assert g["6"]["inputs"]["shift"] == 17.0          # FastHunyuan 官方 shift
-    assert g["8"]["inputs"]["steps"] == 6 and g["8"]["inputs"]["cfg"] == 7.0
+def test_build_hy15_i2v():
+    p = Hy15I2VParams(prompt="a bird flying", image="zimg_1_x.png")
+    g = build_hy15_i2v(p)
+    assert g["2"]["inputs"]["type"] == "hunyuan_video_15"   # qwen2.5vl + byt5 双编码器
+    assert g["9"]["inputs"]["start_image"] == ["5", 0]      # 起始图直连
+    assert g["9"]["inputs"]["clip_vision_output"] == ["6", 0]
+    assert g["12"]["inputs"]["cfg"] == 1.0                  # step 蒸馏：CFG 1
+    assert g["15"]["class_type"] == "SamplerCustomAdvanced"
+    assert g["18"]["class_type"] == "SaveVideo"
+
+
+def test_hy15_param_validation():
+    with pytest.raises(Exception):
+        Hy15I2VParams(prompt="x", image="i.png", length=48)   # 非 4n+1
+    with pytest.raises(Exception):
+        Hy15I2VParams(prompt="x")                             # 缺图片
 
 
 def test_build_zimage_turbo():
@@ -172,8 +179,6 @@ def test_build_flux2_klein():
 def test_t2v_length_validators():
     with pytest.raises(Exception):
         WanT2VParams(prompt="x", length=24)   # 非 4n+1
-    with pytest.raises(Exception):
-        FastHYT2VParams(prompt="x", length=124)  # 非 4n+1
     assert WanT2VParams(prompt="x", length=81).length == 81
 
 

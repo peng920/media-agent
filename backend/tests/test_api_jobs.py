@@ -39,9 +39,9 @@ def test_templates_endpoint(client):
     assert wan["capability"] == "text-to-video"
     assert wan["missing_models"] == []
     assert wan["defaults"]["length"] == 81 and wan["defaults"]["fps"] == 16.0
-    fhy = by_id["fast-hunyuan-t2v-720p"]
-    assert fhy["missing_models"] == []
-    assert fhy["defaults"]["steps"] == 6 and fhy["defaults"]["cfg"] == 7.0
+    hy15 = by_id["hy15-480p-i2v-step-distilled"]
+    assert hy15["capability"] == "image-to-video" and hy15["missing_models"] == []
+    assert hy15["defaults"]["steps"] == 10
     zi = by_id["z-image-turbo"]
     assert zi["capability"] == "text-to-image" and zi["missing_models"] == []
     kl = by_id["flux2-klein-4b"]

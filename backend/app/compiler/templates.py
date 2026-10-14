@@ -440,15 +440,19 @@ WAN_T2V = Template(
 TEMPLATES[WAN_T2V.id] = WAN_T2V
 
 
-# ============ FastHunyuan 文生视频（720p 6步蒸馏档） ============
 
-class FastHYT2VParams(BaseModel):
+# ============ HunyuanVideo 1.5 480p i2v（step 蒸馏档，T4 可用） ============
+# FastHunyuan(13B GGUF) 在 T4 上 6 步 768x448 超 20 分钟未出片，弃用；
+# HY1.5 step 蒸馏档 CFG=1 单次前向 + 8~12 步，是 8.3B 家族里 T4 唯一现实可跑的档。
+# 720p/cfg_distilled(50步+CFG) 在 T4 上按小时计，不选。
+
+class Hy15I2VParams(BaseModel):
     prompt: str = Field(min_length=1, max_length=8000)
-    width: int = Field(default=1280, ge=256, le=1920, multiple_of=16)
-    height: int = Field(default=720, ge=256, le=1920, multiple_of=16)
-    length: int = Field(default=125, ge=9, le=201)
-    steps: int = Field(default=6, ge=1, le=60)        # 官方蒸馏：6 步
-    cfg: float = Field(default=7.0, ge=1.0, le=15.0)  # 官方建议 >6
+    image: str = Field(min_length=1)
+    width: int = Field(default=832, ge=256, le=1280, multiple_of=16)
+    height: int = Field(default=480, ge=256, le=720, multiple_of=16)
+    length: int = Field(default=121, ge=9, le=201)
+    steps: int = Field(default=10, ge=1, le=50)        # step 蒸馏：8~12
     fps: float = Field(default=24.0, ge=8.0, le=60.0)
     seed: int | None = None
 
@@ -456,53 +460,63 @@ class FastHYT2VParams(BaseModel):
     @classmethod
     def _length_4n1(cls, v: int) -> int:
         if (v - 1) % 4 != 0:
-            raise ValueError("帧数须为 4n+1（如 49/121/125）")
+            raise ValueError("帧数须为 4n+1（如 49/121）")
         return v
 
-FASTHY_GGUF_CANDS = ["fast-hunyuan-video-t2v-720p-Q3_K_S.gguf",
-                     "fast-hunyuan-video-t2v-720p-Q3_K_M.gguf",
-                     "fast-hunyuan-video-t2v-720p-Q4_K_S.gguf"]
-FASTHY_TE_CANDS = ["llava_llama3_fp8_scaled.safetensors", "llava_llama3_fp16.safetensors"]
-FASTHY_CLIP_L_CANDS = ["clip_l.safetensors", "clip_l_fp16.safetensors"]
-FASTHY_VAE_CANDS = ["hunyuan_video_vae_bf16.safetensors", "hunyuan_video_vae_fp32.safetensors"]
-FASTHY_NEGATIVE = ("low quality, worst quality, blurry, watermark, text, deformed, "
-                   "distorted, flickering")
+
+HY15_UNET = "hunyuanvideo1.5_480p_i2v_step_distilled_fp8_scaled.safetensors"
+HY15_TE = "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+HY15_TE2 = "byt5_small_glyphxl_fp16.safetensors"
+HY15_VAE = "hunyuanvideo15_vae_fp16.safetensors"
+HY15_CLIPVISION = "sigclip_vision_patch14_384.safetensors"
 
 
-def build_fasthy_t2v(p: FastHYT2VParams, overrides: dict | None = None) -> dict:
+def build_hy15_i2v(p: Hy15I2VParams, overrides: dict | None = None) -> dict:
     ov = overrides or {}
-    unet = ov.get("unet_name", FASTHY_GGUF_CANDS[0])
-    te = ov.get("clip_name2", FASTHY_TE_CANDS[0])
-    clip_l = ov.get("clip_name1", FASTHY_CLIP_L_CANDS[0])
-    vae = ov.get("vae_name", FASTHY_VAE_CANDS[0])
+    unet = ov.get("unet_name", HY15_UNET)
+    te = ov.get("clip_name1", HY15_TE)
     seed = p.seed if p.seed is not None else random.randint(0, 2**48)
     return {
-        "1": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": unet}},
-        # HunyuanVideo 系文本编码器 = clip_l + llava 双编码器（官方模板接线）
+        "1": {"class_type": "UNETLoader",
+              "inputs": {"unet_name": unet, "weight_dtype": "default"}},
         "2": {"class_type": "DualCLIPLoader",
-              "inputs": {"clip_name1": clip_l, "clip_name2": te,
-                         "type": "hunyuan_video"}},
-        "3": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
-        "4": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": p.prompt}},
-        "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": FASTHY_NEGATIVE}},
-        "6": {"class_type": "ModelSamplingSD3", "inputs": {"model": ["1", 0], "shift": 17.0}},
-        "7": {"class_type": "EmptyHunyuanLatentVideo",
-              "inputs": {"width": p.width, "height": p.height, "length": p.length,
+              "inputs": {"clip_name1": te, "clip_name2": HY15_TE2,
+                         "type": "hunyuan_video_15"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": HY15_VAE}},
+        "4": {"class_type": "CLIPVisionLoader", "inputs": {"clip_name": HY15_CLIPVISION}},
+        "5": {"class_type": "LoadImage", "inputs": {"image": p.image}},
+        "6": {"class_type": "CLIPVisionEncode",
+              "inputs": {"clip_vision": ["4", 0], "image": ["5", 0], "crop": "center"}},
+        "7": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": p.prompt}},
+        "8": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": ""}},
+        "9": {"class_type": "HunyuanVideo15ImageToVideo",
+              "inputs": {"positive": ["7", 0], "negative": ["8", 0], "vae": ["3", 0],
+                         "start_image": ["5", 0], "clip_vision_output": ["6", 0],
+                         "width": p.width, "height": p.height, "length": p.length,
                          "batch_size": 1}},
-        "8": {"class_type": "KSampler",
-              "inputs": {"model": ["6", 0], "positive": ["4", 0], "negative": ["5", 0],
-                         "latent_image": ["7", 0], "seed": seed, "steps": p.steps,
-                         "cfg": p.cfg, "sampler_name": "euler", "scheduler": "simple",
-                         "denoise": 1.0}},
-        "9": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["3", 0]}},
-        "10": {"class_type": "CreateVideo", "inputs": {"images": ["9", 0], "fps": p.fps}},
-        "11": {"class_type": "SaveVideo",
-               "inputs": {"video": ["10", 0], "filename_prefix": "zimg", "format": "mp4",
+        "10": {"class_type": "ModelSamplingSD3", "inputs": {"model": ["1", 0], "shift": 7.0}},
+        "11": {"class_type": "BasicScheduler",
+               "inputs": {"model": ["10", 0], "scheduler": "simple", "steps": p.steps,
+                          "denoise": 1.0}},
+        "12": {"class_type": "CFGGuider",
+               "inputs": {"model": ["10", 0], "positive": ["9", 0], "negative": ["9", 1],
+                          "cfg": 1.0}},
+        "13": {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}},
+        "14": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+        "15": {"class_type": "SamplerCustomAdvanced",
+               "inputs": {"noise": ["13", 0], "guider": ["12", 0], "sampler": ["14", 0],
+                          "sigmas": ["11", 0], "latent_image": ["9", 2]}},
+        "16": {"class_type": "VAEDecodeTiled",
+               "inputs": {"samples": ["15", 0], "vae": ["3", 0], "tile_size": 512,
+                          "overlap": 64, "temporal_size": 64, "temporal_overlap": 8}},
+        "17": {"class_type": "CreateVideo", "inputs": {"images": ["16", 0], "fps": p.fps}},
+        "18": {"class_type": "SaveVideo",
+               "inputs": {"video": ["17", 0], "filename_prefix": "zimg", "format": "mp4",
                           "codec": "auto"}},
     }
 
 
-async def _resolve_fasthy(engine) -> dict:
+async def _resolve_hy15(engine) -> dict:
     async def pick(node, field, cands):
         opts = await engine.model_options(node, field)
         for c in cands:
@@ -510,31 +524,31 @@ async def _resolve_fasthy(engine) -> dict:
                 return c
         return None
     ov = {}
-    ov["unet_name"] = await pick("UnetLoaderGGUF", "unet_name", FASTHY_GGUF_CANDS)
-    ov["clip_name2"] = await pick("DualCLIPLoader", "clip_name2", FASTHY_TE_CANDS)
-    ov["clip_name1"] = await pick("DualCLIPLoader", "clip_name1", FASTHY_CLIP_L_CANDS)
-    ov["vae_name"] = await pick("VAELoader", "vae_name", FASTHY_VAE_CANDS)
+    ov["unet_name"] = await pick("UNETLoader", "unet_name", [HY15_UNET])
+    ov["clip_name1"] = await pick("DualCLIPLoader", "clip_name1",
+                                  [HY15_TE, "qwen_2.5_vl_7b.safetensors"])
     miss = [k for k, v in ov.items() if v is None]
     if miss:
-        raise RuntimeError(f"FastHunyuan 缺少模型文件: {miss}，请按 README 下载放入对应目录")
+        raise RuntimeError(f"HunyuanVideo 1.5 缺少模型文件: {miss}，请按 README 下载放入对应目录")
     return ov
 
 
-FASTHY_T2V = Template(
-    id="fast-hunyuan-t2v-720p",
-    name="FastHunyuan 文生视频（720p 6步蒸馏）",
-    capability="text-to-video",
-    params_model=FastHYT2VParams,
-    builder=build_fasthy_t2v,
+HY15_I2V = Template(
+    id="hy15-480p-i2v-step-distilled",
+    name="HunyuanVideo 1.5 图生视频（480p 8步蒸馏）",
+    capability="image-to-video",
+    params_model=Hy15I2VParams,
+    builder=build_hy15_i2v,
     required_models=[
-        ("UnetLoaderGGUF", "unet_name", FASTHY_GGUF_CANDS),
-        ("DualCLIPLoader", "clip_name2", FASTHY_TE_CANDS),
-        ("DualCLIPLoader", "clip_name1", FASTHY_CLIP_L_CANDS),
-        ("VAELoader", "vae_name", FASTHY_VAE_CANDS),
+        ("UNETLoader", "unet_name", HY15_UNET),
+        ("DualCLIPLoader", "clip_name1", [HY15_TE, "qwen_2.5_vl_7b.safetensors"]),
+        ("DualCLIPLoader", "clip_name2", HY15_TE2),
+        ("VAELoader", "vae_name", HY15_VAE),
+        ("CLIPVisionLoader", "clip_name", HY15_CLIPVISION),
     ],
-    resolver=_resolve_fasthy,
+    resolver=_resolve_hy15,
 )
-TEMPLATES[FASTHY_T2V.id] = FASTHY_T2V
+TEMPLATES[HY15_I2V.id] = HY15_I2V
 
 
 # ============ Z-Image Turbo 文生图（T4/Turing 可用的 bf16 档，替代 Qwen-Image 2.1） ============
