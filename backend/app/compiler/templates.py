@@ -10,7 +10,6 @@ class QwenT2IParams(BaseModel):
     height: int = Field(default=1024, ge=256, le=2048, multiple_of=32)
     steps: int = Field(default=6, ge=1, le=50)
     seed: int | None = None
-    use_lora: bool = True
 
 
 # 2026-10-12 真机校准结论：qwen_image_2.1_turbo 需 4096 维文本特征（qwen3vl_8b），
@@ -23,14 +22,12 @@ TE_CANDIDATES = [
     "qwen3vl_8b_bf16.safetensors",
 ]
 VAE = "qwen_image_2.1_vae_bf16.safetensors"
-LORA = "Qwen-Image-2.1-viggle-turbo-v0.3-6step-lora-r128.safetensors"
 
 
 def build_qwen_t2i(p: QwenT2IParams, overrides: dict | None = None) -> dict:
     seed = p.seed if p.seed is not None else random.randint(0, 2**48)
     te = (overrides or {}).get("clip_name", TE_CANDIDATES[0])
-    model_src = ["1", 0]
-    g: dict = {
+    return {
         "1": {"class_type": "UNETLoader",
               "inputs": {"unet_name": UNET, "weight_dtype": "default"}},
         "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": te, "type": "qwen_image"}},
@@ -39,19 +36,13 @@ def build_qwen_t2i(p: QwenT2IParams, overrides: dict | None = None) -> dict:
         "6": {"class_type": "EmptySD3LatentImage",
               "inputs": {"width": p.width, "height": p.height, "batch_size": 1}},
         "7": {"class_type": "KSampler",
-              "inputs": {"model": None, "positive": ["5", 0], "negative": ["5", 0],
+              "inputs": {"model": ["1", 0], "positive": ["5", 0], "negative": ["5", 0],
                          "latent_image": ["6", 0], "seed": seed, "steps": p.steps,
                          "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple",
                          "denoise": 1.0}},
         "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["3", 0]}},
         "9": {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "filename_prefix": "zimg"}},
     }
-    if p.use_lora:
-        g["4"] = {"class_type": "LoraLoaderModelOnly",
-                  "inputs": {"model": ["1", 0], "lora_name": LORA, "strength_model": 1.0}}
-        model_src = ["4", 0]
-    g["7"]["inputs"]["model"] = model_src
-    return g
 
 
 class Template:
@@ -95,10 +86,6 @@ QWEN_T2I = Template(
         ("VAELoader", "vae_name", VAE),
     ],
     resolver=_resolve_te,
-    optional_models=[
-        # LoRA 缺失时关掉 use_lora 仍可生成，故列为可选
-        ("LoraLoaderModelOnly", "lora_name", LORA),
-    ],
 )
 
 

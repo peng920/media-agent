@@ -29,7 +29,7 @@ def test_templates_endpoint(client):
     assert qwen["defaults"]["width"] == 1024
     assert qwen["defaults"]["prompt"] is None
     assert qwen["missing_models"] == []
-    assert len(qwen["missing_optional_models"]) == 1  # LoRA 不在场，仅提示
+    assert qwen["missing_optional_models"] == []      # LoRA 已移除，无可选缺失
     ltx = by_id["ltx-2.3-i2v"]
     assert ltx["capability"] == "image-to-video"
     ltx2b = by_id["ltx-2b-i2v-distilled"]

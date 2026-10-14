@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Alert, Button, Card, Col, Form, Input, InputNumber, message, Row, Select, Switch,
+  Alert, Button, Card, Col, Form, Input, InputNumber, message, Row, Select,
   Upload,
 } from 'antd'
 import { UploadOutlined } from '@ant-design/icons'
@@ -17,7 +17,6 @@ interface FormValues {
   cfg?: number
   steps: number
   seed?: number
-  use_lora: boolean
 }
 
 export default function Create() {
@@ -53,7 +52,6 @@ export default function Create() {
       steps: (d.steps as number) ?? 6,
       length: (d.length as number) ?? 25,
       cfg: (d.cfg as number) ?? 3.0,
-      use_lora: (d.use_lora as boolean) ?? true,
       image: undefined,
     })
   }
@@ -71,7 +69,6 @@ export default function Create() {
         params.cfg = v.cfg
       }
       if (needImage) params.image = v.image
-      if (!isVideo) params.use_lora = v.use_lora
       const job = await submitJob(v.template_id, params)
       message.success(`任务 #${job.id} 已提交`)
       navigate('/jobs')
@@ -98,7 +95,7 @@ export default function Create() {
           type="warning"
           showIcon
           style={{ marginBottom: 16 }}
-          message="可选模型缺失（关闭对应开关即可正常提交）"
+          message="可选模型缺失（仅提醒，不影响提交）"
           description={missingOptional.join('、')}
         />
       )}
@@ -114,7 +111,6 @@ export default function Create() {
           steps: isVideo ? 20 : 6,
           length: 25,
           cfg: 3.0,
-          use_lora: true,
         }}
       >
         <Form.Item name="template_id" label="模板" rules={[{ required: true }]}>
@@ -188,7 +184,7 @@ export default function Create() {
             </Form.Item>
           </Col>
         </Row>
-        {isVideo ? (
+        {isVideo && (
           <Row gutter={16}>
             <Col span={6}>
               <Form.Item name="length" label="帧数（8n+1）" rules={[{ required: true }]}>
@@ -201,10 +197,6 @@ export default function Create() {
               </Form.Item>
             </Col>
           </Row>
-        ) : (
-          <Form.Item name="use_lora" label="启用 Turbo LoRA" valuePropName="checked">
-            <Switch />
-          </Form.Item>
         )}
         <Button
           type="primary"

@@ -15,9 +15,6 @@
      `qwen3vl_8b_bf16.safetensors`（16.3G）
      下载：`https://hf-mirror.com/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3vl_8b_w4a8.safetensors`
    - `vae/qwen_image_2.1_vae_bf16.safetensors`
-   - `loras/`（可选，缺失时创作页关掉 Turbo LoRA 即可）：
-     官方 `qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors`（871M）
-     `https://hf-mirror.com/Comfy-Org/Qwen-Image-2.1/resolve/main/loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors`
 
 ## 启动
 

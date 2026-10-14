@@ -7,10 +7,9 @@ from app.compiler.templates import (TEMPLATES, QwenT2IParams, build_qwen_t2i,
                                     FastHYT2VParams, build_fasthy_t2v, validate_models)
 
 
-def test_build_with_lora():
+def test_build_qwen_t2i():
     g = build_qwen_t2i(QwenT2IParams(prompt="a cat"))
-    assert g["7"]["inputs"]["model"] == ["4", 0]
-    assert g["4"]["class_type"] == "LoraLoaderModelOnly"
+    assert g["7"]["inputs"]["model"] == ["1", 0]          # turbo 裸跑，无 LoRA
     assert g["9"]["class_type"] == "SaveImage"
     assert g["7"]["inputs"]["cfg"] == 1.0
     assert g["2"]["inputs"]["clip_name"] == "qwen3vl_8b_w4a8.safetensors"  # 默认取候选首选
@@ -20,12 +19,6 @@ def test_build_te_override():
     g = build_qwen_t2i(QwenT2IParams(prompt="a cat"),
                        {"clip_name": "qwen3vl_8b_bf16.safetensors"})
     assert g["2"]["inputs"]["clip_name"] == "qwen3vl_8b_bf16.safetensors"
-
-
-def test_build_without_lora():
-    g = build_qwen_t2i(QwenT2IParams(prompt="a cat", use_lora=False))
-    assert "4" not in g
-    assert g["7"]["inputs"]["model"] == ["1", 0]
 
 
 def test_seed_random_when_none():
@@ -58,7 +51,7 @@ async def test_validate_models_reports_missing():
 
 
 def _full_opts():
-    """全部模板的必需条目在场的选项表（LoRA 除外，用于可选路径测试）。"""
+    """全部模板的必需条目在场的选项表。"""
     opts: dict = {}
     for tpl in TEMPLATES.values():
         for n, f, v in tpl.required_models:
@@ -67,11 +60,11 @@ def _full_opts():
     return opts
 
 
-async def test_validate_models_lora_is_optional():
+async def test_validate_models_all_present():
     opts = _full_opts()
-    report = await validate_models(FakeEngine(opts))  # LoRA 不在场
+    report = await validate_models(FakeEngine(opts))
     assert report["required"] == []
-    assert len(report["optional"]) == 1 and "viggle" in report["optional"][0]
+    assert report["optional"] == []                       # 已无可选条目（LoRA 已移除）
 
 
 async def test_validate_models_accepts_any_te_candidate():
