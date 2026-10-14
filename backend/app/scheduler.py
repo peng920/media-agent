@@ -110,7 +110,8 @@ class Scheduler:
             if st.get("completed"):
                 outs = []
                 for node_out in h.get("outputs", {}).values():
-                    outs.extend(node_out.get("images", []))
+                    for key in ("images", "videos", "gifs", "audio"):
+                        outs.extend(node_out.get(key, []))
                 return outs
             await asyncio.sleep(1.0)
         raise TimeoutError("任务超时(1h)")

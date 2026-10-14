@@ -1,7 +1,7 @@
 import pytest
 
 from app.compiler.templates import (TEMPLATES, QwenT2IParams, build_qwen_t2i,
-                                    validate_models)
+                                    LtxI2VParams, build_ltx_i2v, validate_models)
 
 
 def test_build_with_lora():
@@ -54,23 +54,77 @@ async def test_validate_models_reports_missing():
     assert any("qwen3vl_8b" in m for m in report["required"])
 
 
+def _full_opts():
+    """两个模板全部必需条目在场的选项表（LoRA 除外，用于可选路径测试）。"""
+    from app.compiler.templates import QWEN_T2I, LTX_I2V
+    opts = {}
+    for tpl in (QWEN_T2I, LTX_I2V):
+        for n, f, v in tpl.required_models:
+            opts.setdefault((n, f), [])
+            opts[(n, f)] += v if isinstance(v, list) else [v]
+    return opts
+
+
 async def test_validate_models_lora_is_optional():
-    from app.compiler.templates import QWEN_T2I
-    opts = {(n, f): ([v] if isinstance(v, list) else [v])
-            for n, fs in QWEN_T2I.required_models.items() for f, v in fs.items()}
-    opts[("CLIPLoader", "clip_name")] = ["qwen3vl_8b_w4a8.safetensors"]
+    opts = _full_opts()
     report = await validate_models(FakeEngine(opts))  # LoRA 不在场
     assert report["required"] == []
     assert len(report["optional"]) == 1 and "viggle" in report["optional"][0]
 
 
 async def test_validate_models_accepts_any_te_candidate():
-    from app.compiler.templates import QWEN_T2I
-    opts = {(n, f): ([v] if isinstance(v, list) else [v])
-            for n, fs in QWEN_T2I.required_models.items() for f, v in fs.items()}
     for te in ["qwen3vl_8b_w4a8.safetensors", "qwen3vl_8b_int8_convrot.safetensors"]:
+        opts = _full_opts()
         opts[("CLIPLoader", "clip_name")] = [te]
         assert (await validate_models(FakeEngine(opts)))["required"] == []
+
+
+def test_build_ltx_i2v():
+    p = LtxI2VParams(prompt="a cat walking", image="zimg_1_abc.png")
+    g = build_ltx_i2v(p)
+    assert g["2"]["inputs"]["type"] == "ltxv"
+    assert g["2"]["inputs"]["clip_name2"] == "ltx-2.3-22b-dev_embeddings_connectors.safetensors"
+    assert g["2"]["inputs"]["clip_name1"] == "gemma-3-12b-it-qat-UD-Q4_K_XL.gguf"
+    assert g["5"]["inputs"]["image"] == "zimg_1_abc.png"
+    assert g["14"]["inputs"]["positive"] == ["9", 0]   # i2v 条件进 guider
+    assert g["17"]["inputs"]["latent_image"] == ["12", 0]
+    assert g["22"]["class_type"] == "SaveVideo"
+    assert g["21"]["inputs"]["audio"] == ["20", 0]     # 音轨并入视频
+
+
+def test_build_ltx_gemma_override():
+    g = build_ltx_i2v(LtxI2VParams(prompt="x", image="i.png"),
+                      {"clip_name1": "gemma-3-12b-it-qat-Q8_0.gguf"})
+    assert g["2"]["inputs"]["clip_name1"] == "gemma-3-12b-it-qat-Q8_0.gguf"
+
+
+def test_ltx_param_validation():
+    with pytest.raises(Exception):
+        LtxI2VParams(prompt="x", image="i.png", width=100)   # 非32倍
+    with pytest.raises(Exception):
+        LtxI2VParams(prompt="x", image="i.png", length=24)   # 非 8n+1
+    with pytest.raises(Exception):
+        LtxI2VParams(prompt="x")                             # 缺图片
+
+
+async def test_validate_models_reports_gemma_missing():
+    opts = {("UnetLoaderGGUF", "unet_name"): ["ltx-2.3-22b-dev-Q3_K_S.gguf"],
+            ("DualCLIPLoaderGGUF", "clip_name2"):
+                ["ltx-2.3-22b-dev_embeddings_connectors.safetensors"],
+            ("VAELoaderKJ", "vae_name"): ["ltx-2.3-22b-dev_video_vae.safetensors"]}
+    report = await validate_models(FakeEngine(opts))
+    assert any("gemma" in m for m in report["required"])
+
+
+async def test_validate_models_scoped_per_template():
+    """缺 gemma 不应拖累 qwen 模板的可用性。"""
+    from app.compiler.templates import TEMPLATES
+    opts = _full_opts()
+    del opts[("DualCLIPLoaderGGUF", "clip_name1")]
+    qwen_r = await validate_models(FakeEngine(opts), TEMPLATES["qwen-image-2.1-turbo"])
+    ltx_r = await validate_models(FakeEngine(opts), TEMPLATES["ltx-2.3-i2v"])
+    assert qwen_r["required"] == []
+    assert any("gemma" in m for m in ltx_r["required"])
 
 
 async def test_resolve_te_preference_order():

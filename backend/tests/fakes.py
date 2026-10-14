@@ -6,6 +6,12 @@ FAKE_HISTORY_DONE = {
         {"filename": "a.png", "subfolder": "", "type": "output"}]}},
 }
 
+FAKE_HISTORY_VIDEO = {
+    "status": {"completed": True, "status_str": "success"},
+    "outputs": {"22": {"videos": [
+        {"filename": "a.mp4", "subfolder": "", "type": "output"}]}},
+}
+
 
 class FakeEngine:
     base_url = "http://fake-engine"
@@ -33,6 +39,12 @@ class FakeEngine:
             ("CLIPLoader", "clip_name"): ["qwen3vl_8b_w4a8.safetensors"],
             ("UNETLoader", "unet_name"): ["qwen_image_2.1_turbo_int8_convrot.safetensors"],
             ("VAELoader", "vae_name"): ["qwen_image_2.1_vae_bf16.safetensors"],
+            ("UnetLoaderGGUF", "unet_name"): ["ltx-2.3-22b-dev-Q3_K_S.gguf"],
+            ("DualCLIPLoaderGGUF", "clip_name1"): ["gemma-3-12b-it-qat-UD-Q4_K_XL.gguf"],
+            ("DualCLIPLoaderGGUF", "clip_name2"):
+                ["ltx-2.3-22b-dev_embeddings_connectors.safetensors"],
+            ("VAELoaderKJ", "vae_name"): ["ltx-2.3-22b-dev_video_vae.safetensors",
+                                          "ltx-2.3-22b-dev_audio_vae.safetensors"],
         }.get((node, field), [])
 
 

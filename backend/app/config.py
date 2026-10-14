@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ZIMG_", env_file=".env", extra="ignore")
 
     engine_base_url: str = "http://127.0.0.1:8188"
+    engine_input_dir: Path = Path("/data/github/ComfyUI/input")
     data_dir: Path = Path("data")
     token_secret: str = "dev-secret"
     seed_users: bool = True

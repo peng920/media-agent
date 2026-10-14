@@ -103,3 +103,34 @@ async def test_single_slot_serializes(settings, patched_download):
         assert len(running_seen) == 2
     finally:
         task.cancel()
+
+
+async def test_ltx_video_job_lifecycle(settings, patched_download):
+    """LTX 图生视频：视频产物（videos 键）也要落盘并可访问。"""
+    from tests.fakes import FAKE_HISTORY_VIDEO
+
+    class VideoEngine(FakeEngine):
+        async def history(self, prompt_id):
+            return FAKE_HISTORY_VIDEO
+
+    notifier = Notifier()
+    q = notifier.subscribe()
+    sched = Scheduler(VideoEngine(), appdb.session_factory(settings), settings, notifier)
+    sf = appdb.session_factory(settings)
+    with next(sf()) as s:
+        job = Job(user_id=1, template_id="ltx-2.3-i2v",
+                  params=json.dumps({"prompt": "cat walks", "image": "zimg_1_x.png"}))
+        s.add(job)
+        s.commit()
+        s.refresh(job)
+
+    task = asyncio.create_task(sched.run_forever())
+    try:
+        events = [await asyncio.wait_for(q.get(), 5) for _ in range(2)]
+        assert events[0]["status"] == "RUNNING"
+        assert events[1]["status"] == "DONE"
+        assert events[1]["outputs"][0]["url"].endswith(f"{job.id}_0_a.mp4")
+        out = settings.data_dir / "users" / "1" / "outputs" / str(job.id)
+        assert (out / f"{job.id}_0_a.mp4").exists()
+    finally:
+        task.cancel()

@@ -1,7 +1,7 @@
 import random
 from collections.abc import Callable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class QwenT2IParams(BaseModel):
@@ -55,11 +55,15 @@ def build_qwen_t2i(p: QwenT2IParams, overrides: dict | None = None) -> dict:
 
 
 class Template:
+    """required_models/optional_models：[(node, field, 文件名或候选列表)， ...]
+    条目列表形式允许同一节点同一字段出现多次（如双 VAE）。"""
+
     def __init__(self, id, name, capability, params_model, builder, required_models,
                  resolver=None, optional_models=None):
         self.id, self.name, self.capability = id, name, capability
-        self.params_model, self.builder, self.required_models = params_model, builder, required_models
-        self.optional_models = optional_models or {}
+        self.params_model, self.builder = params_model, builder
+        self.required_models = required_models or []
+        self.optional_models = optional_models or []
         self._resolver = resolver  # async (engine) -> {"节点入参名": 文件名}
 
     def build(self, params: BaseModel, overrides: dict | None = None) -> dict:
@@ -85,41 +89,154 @@ QWEN_T2I = Template(
     capability="text-to-image",
     params_model=QwenT2IParams,
     builder=build_qwen_t2i,
-    required_models={
-        "UNETLoader": {"unet_name": UNET},
-        "CLIPLoader": {"clip_name": TE_CANDIDATES},
-        "VAELoader": {"vae_name": VAE},
-    },
+    required_models=[
+        ("UNETLoader", "unet_name", UNET),
+        ("CLIPLoader", "clip_name", TE_CANDIDATES),
+        ("VAELoader", "vae_name", VAE),
+    ],
     resolver=_resolve_te,
-    optional_models={
+    optional_models=[
         # LoRA 缺失时关掉 use_lora 仍可生成，故列为可选
-        "LoraLoaderModelOnly": {"lora_name": LORA},
-    },
+        ("LoraLoaderModelOnly", "lora_name", LORA),
+    ],
 )
 
-TEMPLATES: dict[str, Template] = {QWEN_T2I.id: QWEN_T2I}
 
-
-async def _check_group(engine, groups: dict) -> list[str]:
+async def _check_group(engine, entries: list) -> list[str]:
     missing = []
-    for node, fields in groups.items():
-        for field, expected in fields.items():
-            cands = expected if isinstance(expected, list) else [expected]
-            try:
-                opts = await engine.model_options(node, field)
-            except Exception as e:
-                missing.append(f"{'/'.join(cands)}（无法查询引擎: {e}）")
-                continue
-            if not any(c in opts for c in cands):
-                missing.append(" 或 ".join(cands))
+    for node, field, expected in entries:
+        cands = expected if isinstance(expected, list) else [expected]
+        try:
+            opts = await engine.model_options(node, field)
+        except Exception as e:
+            missing.append(f"{'/'.join(cands)}（无法查询引擎: {e}）")
+            continue
+        if not any(c in opts for c in cands):
+            missing.append(" 或 ".join(cands))
     return missing
 
 
-async def validate_models(engine) -> dict:
-    """返回 {"required": [...], "optional": [...]}；required 为空才允许任务提交。"""
+async def validate_models(engine, tpl=None) -> dict:
+    """返回 {"required": [...], "optional": [...]}；required 为空才允许任务提交。
+    tpl=None 时汇总所有模板，否则只查该模板。"""
+    targets = [tpl] if tpl is not None else list(TEMPLATES.values())
     required: list[str] = []
     optional: list[str] = []
-    for tpl in TEMPLATES.values():
-        required += await _check_group(engine, tpl.required_models)
-        optional += await _check_group(engine, tpl.optional_models)
+    for t in targets:
+        required += await _check_group(engine, t.required_models)
+        optional += await _check_group(engine, t.optional_models)
     return {"required": required, "optional": optional}
+
+
+# ============ LTX-2.3 图生视频（音视频联合，unsloth GGUF 配方） ============
+
+class LtxI2VParams(BaseModel):
+    prompt: str = Field(min_length=1, max_length=8000)
+    image: str = Field(min_length=1)  # 引擎 input 目录里的文件名（经 /api/uploads 上传）
+    width: int = Field(default=768, ge=256, le=1920, multiple_of=32)
+    height: int = Field(default=512, ge=256, le=1920, multiple_of=32)
+    length: int = Field(default=25, ge=9, le=121)        # 帧数，8n+1
+    steps: int = Field(default=20, ge=1, le=60)
+    cfg: float = Field(default=3.0, ge=1.0, le=10.0)     # dev 模型非蒸馏，需 CFG
+    fps: float = Field(default=24.0, ge=8.0, le=60.0)
+    seed: int | None = None
+
+    @field_validator("length")
+    @classmethod
+    def _length_8n1(cls, v: int) -> int:
+        if (v - 1) % 8 != 0:
+            raise ValueError("帧数须为 8n+1（如 25/49/97）")
+        return v
+
+LTX_GGUF = "ltx-2.3-22b-dev-Q3_K_S.gguf"
+EMB_CONN = "ltx-2.3-22b-dev_embeddings_connectors.safetensors"
+LTX_VIDEO_VAE = "ltx-2.3-22b-dev_video_vae.safetensors"
+LTX_AUDIO_VAE = "ltx-2.3-22b-dev_audio_vae.safetensors"
+GEMMA_CANDIDATES = [
+    "gemma-3-12b-it-qat-UD-Q4_K_XL.gguf",
+    "gemma-3-12b-it-qat-UD-Q3_K_XL.gguf",
+    "gemma-3-12b-it-qat-Q4_K_M.gguf",
+    "gemma-3-12b-it-qat-Q5_K_M.gguf",
+    "gemma-3-12b-it-qat-Q8_0.gguf",
+]
+LTX_NEGATIVE = ("blurry, low quality, still frame, frames, watermark, overlay, "
+                "titles, has blurbox, has subtitles")
+
+
+def build_ltx_i2v(p: LtxI2VParams, overrides: dict | None = None) -> dict:
+    ov = overrides or {}
+    gemma = ov.get("clip_name1", GEMMA_CANDIDATES[0])
+    seed = p.seed if p.seed is not None else random.randint(0, 2**48)
+    return {
+        "1": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": LTX_GGUF}},
+        "2": {"class_type": "DualCLIPLoaderGGUF",
+              "inputs": {"clip_name1": gemma, "clip_name2": EMB_CONN, "type": "ltxv"}},
+        "3": {"class_type": "VAELoaderKJ",
+              "inputs": {"vae_name": LTX_VIDEO_VAE, "device": "main_device", "weight_dtype": "bf16"}},
+        "4": {"class_type": "VAELoaderKJ",
+              "inputs": {"vae_name": LTX_AUDIO_VAE, "device": "main_device", "weight_dtype": "bf16"}},
+        "5": {"class_type": "LoadImage", "inputs": {"image": p.image}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": p.prompt}},
+        "7": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": LTX_NEGATIVE}},
+        "8": {"class_type": "LTXVConditioning",
+              "inputs": {"positive": ["6", 0], "negative": ["7", 0], "frame_rate": p.fps}},
+        "9": {"class_type": "LTXVImgToVideo",
+              "inputs": {"positive": ["8", 0], "negative": ["8", 1], "vae": ["3", 0],
+                         "image": ["5", 0], "width": p.width, "height": p.height,
+                         "length": p.length, "batch_size": 1, "strength": 1.0}},
+        "10": {"class_type": "EmptyLTXVLatentVideo",
+               "inputs": {"width": p.width, "height": p.height, "length": p.length, "batch_size": 1}},
+        "11": {"class_type": "LTXVEmptyLatentAudio",
+               "inputs": {"frames_number": p.length, "frame_rate": p.fps,
+                          "batch_size": 1, "audio_vae": ["4", 0]}},
+        "12": {"class_type": "LTXVConcatAVLatent",
+               "inputs": {"video_latent": ["10", 0], "audio_latent": ["11", 0]}},
+        "13": {"class_type": "LTXVScheduler",
+               "inputs": {"steps": p.steps, "max_shift": 2.05, "base_shift": 0.95,
+                          "stretch": True, "terminal": 0.1}},
+        "14": {"class_type": "CFGGuider",
+               "inputs": {"model": ["1", 0], "positive": ["9", 0], "negative": ["9", 1], "cfg": p.cfg}},
+        "15": {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}},
+        "16": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler_ancestral"}},
+        "17": {"class_type": "SamplerCustomAdvanced",
+               "inputs": {"noise": ["15", 0], "guider": ["14", 0], "sampler": ["16", 0],
+                          "sigmas": ["13", 0], "latent_image": ["12", 0]}},
+        "18": {"class_type": "LTXVSeparateAVLatent", "inputs": {"av_latent": ["17", 0]}},
+        "19": {"class_type": "VAEDecodeTiled",
+               "inputs": {"samples": ["18", 0], "vae": ["3", 0], "tile_size": 512,
+                          "overlap": 64, "temporal_size": 4096, "temporal_overlap": 8}},
+        "20": {"class_type": "LTXVAudioVAEDecode", "inputs": {"samples": ["18", 1], "audio_vae": ["4", 0]}},
+        "21": {"class_type": "CreateVideo",
+               "inputs": {"images": ["19", 0], "fps": p.fps, "audio": ["20", 0]}},
+        "22": {"class_type": "SaveVideo",
+               "inputs": {"video": ["21", 0], "filename_prefix": "zimg", "format": "mp4",
+                          "codec": "auto"}},
+    }
+
+
+async def _resolve_gemma(engine) -> dict:
+    opts = await engine.model_options("DualCLIPLoaderGGUF", "clip_name1")
+    for cand in GEMMA_CANDIDATES:
+        if cand in opts:
+            return {"clip_name1": cand}
+    raise RuntimeError("缺少 LTX 文本编码器 gemma-3-12b-it-qat（UD-Q4_K_XL 推荐），"
+                       "请放入 engine 的 text_encoders 目录")
+
+
+LTX_I2V = Template(
+    id="ltx-2.3-i2v",
+    name="LTX-2.3 图生视频（含音频）",
+    capability="image-to-video",
+    params_model=LtxI2VParams,
+    builder=build_ltx_i2v,
+    required_models=[
+        ("UnetLoaderGGUF", "unet_name", LTX_GGUF),
+        ("DualCLIPLoaderGGUF", "clip_name1", GEMMA_CANDIDATES),
+        ("DualCLIPLoaderGGUF", "clip_name2", EMB_CONN),
+        ("VAELoaderKJ", "vae_name", LTX_VIDEO_VAE),
+        ("VAELoaderKJ", "vae_name", LTX_AUDIO_VAE),
+    ],
+    resolver=_resolve_gemma,
+)
+
+TEMPLATES: dict[str, Template] = {QWEN_T2I.id: QWEN_T2I, LTX_I2V.id: LTX_I2V}

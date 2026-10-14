@@ -9,6 +9,7 @@ from app import db as appdb
 from app.api.routes_auth import router as r_auth
 from app.api.routes_jobs import router as r_jobs
 from app.api.routes_misc import router as r_misc, ws_jobs
+from app.api.routes_uploads import router as r_uploads
 from app.config import Settings, get_settings
 from app.engine.client import EngineClient
 from app.events import Notifier
@@ -40,6 +41,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(r_auth)
     app.include_router(r_jobs)
     app.include_router(r_misc)
+    app.include_router(r_uploads)
     app.websocket("/ws/jobs")(ws_jobs)
 
     s.data_dir.mkdir(parents=True, exist_ok=True)
