@@ -41,7 +41,8 @@ export default function Create() {
 
   const missing = selected?.missing_models ?? []
   const missingOptional = selected?.missing_optional_models ?? []
-  const isVideo = selected?.capability === 'image-to-video'
+  const isVideo = selected?.capability !== 'text-to-image'
+  const needImage = selected?.capability === 'image-to-video'
 
   function applyDefaults(f: { setFieldsValue: (v: Partial<FormValues>) => void },
                          t: TemplateItem) {
@@ -66,12 +67,11 @@ export default function Create() {
       }
       if (v.seed !== undefined && v.seed !== null) params.seed = v.seed
       if (isVideo) {
-        params.image = v.image
         params.length = v.length
         params.cfg = v.cfg
-      } else {
-        params.use_lora = v.use_lora
       }
+      if (needImage) params.image = v.image
+      if (!isVideo) params.use_lora = v.use_lora
       const job = await submitJob(v.template_id, params)
       message.success(`任务 #${job.id} 已提交`)
       navigate('/jobs')
@@ -128,7 +128,7 @@ export default function Create() {
             }}
           />
         </Form.Item>
-        {isVideo && (
+        {needImage && (
           <Form.Item
             name="image"
             label="起始图片"

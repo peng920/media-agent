@@ -23,7 +23,7 @@ def test_templates_endpoint(client):
     r = client.get("/api/templates")
     assert r.status_code == 200
     data = r.json()
-    assert len(data) == 3
+    assert len(data) == 5
     by_id = {t["id"]: t for t in data}
     qwen = by_id["qwen-image-2.1-turbo"]
     assert qwen["defaults"]["width"] == 1024
@@ -32,11 +32,16 @@ def test_templates_endpoint(client):
     assert len(qwen["missing_optional_models"]) == 1  # LoRA 不在场，仅提示
     ltx = by_id["ltx-2.3-i2v"]
     assert ltx["capability"] == "image-to-video"
-    assert ltx["missing_models"] == []                # FakeEngine 全量提供
-    assert ltx["defaults"]["length"] == 25
     ltx2b = by_id["ltx-2b-i2v-distilled"]
     assert ltx2b["missing_models"] == []
     assert ltx2b["defaults"]["steps"] == 8 and ltx2b["defaults"]["cfg"] == 1.0
+    wan = by_id["wan-2.1-1.3b-t2v"]
+    assert wan["capability"] == "text-to-video"
+    assert wan["missing_models"] == []
+    assert wan["defaults"]["length"] == 81 and wan["defaults"]["fps"] == 16.0
+    fhy = by_id["fast-hunyuan-t2v-720p"]
+    assert fhy["missing_models"] == []
+    assert fhy["defaults"]["steps"] == 6 and fhy["defaults"]["cfg"] == 7.0
 
 
 def test_submit_and_isolation(client):

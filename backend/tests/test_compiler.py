@@ -2,7 +2,9 @@ import pytest
 
 from app.compiler.templates import (TEMPLATES, QwenT2IParams, build_qwen_t2i,
                                     LtxI2VParams, build_ltx_i2v,
-                                    Ltx2bI2VParams, build_ltx_2b_i2v, validate_models)
+                                    Ltx2bI2VParams, build_ltx_2b_i2v,
+                                    WanT2VParams, build_wan_t2v,
+                                    FastHYT2VParams, build_fasthy_t2v, validate_models)
 
 
 def test_build_with_lora():
@@ -75,7 +77,8 @@ async def test_validate_models_lora_is_optional():
 async def test_validate_models_accepts_any_te_candidate():
     for te in ["qwen3vl_8b_w4a8.safetensors", "qwen3vl_8b_int8_convrot.safetensors"]:
         opts = _full_opts()
-        opts[("CLIPLoader", "clip_name")] = [te]
+        base = opts[("CLIPLoader", "clip_name")]
+        opts[("CLIPLoader", "clip_name")] = [te] + [x for x in base if x != te]
         assert (await validate_models(FakeEngine(opts)))["required"] == []
 
 
@@ -130,6 +133,31 @@ async def test_resolve_2b_te_fallback_to_safetensors():
                          ("VAELoader", "vae_name"): ["ltxv_vae.safetensors"]})
     ov = await TEMPLATES["ltx-2b-i2v-distilled"].resolve_overrides(engine)
     assert ov["clip_name"] == "t5xxl_fp8_safetensors.safetensors"
+
+
+def test_build_wan_t2v():
+    g = build_wan_t2v(WanT2VParams(prompt="一只猫在草地上奔跑"))
+    assert g["2"]["inputs"]["type"] == "wan"
+    assert g["6"]["inputs"]["shift"] == 8.0           # 1.3B t2v 官方 shift
+    assert g["7"]["class_type"] == "EmptyHunyuanLatentVideo"
+    assert g["8"]["inputs"]["cfg"] == 5.0
+    assert g["11"]["class_type"] == "SaveVideo"
+
+
+def test_build_fasthy_t2v():
+    g = build_fasthy_t2v(FastHYT2VParams(prompt="ocean waves at sunset"))
+    assert g["1"]["class_type"] == "UnetLoaderGGUF"
+    assert g["2"]["inputs"]["type"] == "hunyuan_video"
+    assert g["6"]["inputs"]["shift"] == 17.0          # FastHunyuan 官方 shift
+    assert g["8"]["inputs"]["steps"] == 6 and g["8"]["inputs"]["cfg"] == 7.0
+
+
+def test_t2v_length_validators():
+    with pytest.raises(Exception):
+        WanT2VParams(prompt="x", length=24)   # 非 4n+1
+    with pytest.raises(Exception):
+        FastHYT2VParams(prompt="x", length=124)  # 非 4n+1
+    assert WanT2VParams(prompt="x", length=81).length == 81
 
 
 def test_ltx_param_validation():

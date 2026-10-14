@@ -360,3 +360,185 @@ LTX_2B_I2V = Template(
 )
 
 TEMPLATES[LTX_2B_I2V.id] = LTX_2B_I2V
+
+
+# ============ Wan 2.1 1.3B 文生视频（480p 轻量档） ============
+
+class WanT2VParams(BaseModel):
+    prompt: str = Field(min_length=1, max_length=8000)
+    width: int = Field(default=848, ge=256, le=1920, multiple_of=16)
+    height: int = Field(default=480, ge=256, le=1920, multiple_of=16)
+    length: int = Field(default=81, ge=9, le=161)
+    steps: int = Field(default=25, ge=1, le=60)
+    cfg: float = Field(default=5.0, ge=1.0, le=15.0)
+    fps: float = Field(default=16.0, ge=8.0, le=60.0)
+    seed: int | None = None
+
+    @field_validator("length")
+    @classmethod
+    def _length_4n1(cls, v: int) -> int:
+        if (v - 1) % 4 != 0:
+            raise ValueError("帧数须为 4n+1（如 25/49/81）")
+        return v
+
+WAN_UNET_CANDS = ["wan2.1_t2v_1.3B_fp16.safetensors",
+                  "wan2.1_t2v_1.3B_bf16.safetensors"]
+WAN_TE_CANDS = ["umt5_xxl_fp8_e4m3fn_scaled.safetensors", "umt5_xxl_fp16.safetensors"]
+WAN_VAE_CANDS = ["wan_2.1_vae.safetensors"]
+WAN_NEGATIVE = ("色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，"
+                "低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，"
+                "毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走")
+
+
+def build_wan_t2v(p: WanT2VParams, overrides: dict | None = None) -> dict:
+    ov = overrides or {}
+    unet = ov.get("unet_name", WAN_UNET_CANDS[0])
+    te = ov.get("clip_name", WAN_TE_CANDS[0])
+    vae = ov.get("vae_name", WAN_VAE_CANDS[0])
+    seed = p.seed if p.seed is not None else random.randint(0, 2**48)
+    return {
+        "1": {"class_type": "UNETLoader",
+              "inputs": {"unet_name": unet, "weight_dtype": "default"}},
+        "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": te, "type": "wan"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
+        "4": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": p.prompt}},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": WAN_NEGATIVE}},
+        "6": {"class_type": "ModelSamplingSD3", "inputs": {"model": ["1", 0], "shift": 8.0}},
+        "7": {"class_type": "EmptyHunyuanLatentVideo",
+              "inputs": {"width": p.width, "height": p.height, "length": p.length,
+                         "batch_size": 1}},
+        "8": {"class_type": "KSampler",
+              "inputs": {"model": ["6", 0], "positive": ["4", 0], "negative": ["5", 0],
+                         "latent_image": ["7", 0], "seed": seed, "steps": p.steps,
+                         "cfg": p.cfg, "sampler_name": "euler", "scheduler": "simple",
+                         "denoise": 1.0}},
+        "9": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["3", 0]}},
+        "10": {"class_type": "CreateVideo", "inputs": {"images": ["9", 0], "fps": p.fps}},
+        "11": {"class_type": "SaveVideo",
+               "inputs": {"video": ["10", 0], "filename_prefix": "zimg", "format": "mp4",
+                          "codec": "auto"}},
+    }
+
+
+async def _resolve_wan(engine) -> dict:
+    async def pick(node, field, cands):
+        opts = await engine.model_options(node, field)
+        for c in cands:
+            if c in opts:
+                return c
+        return None
+    ov = {}
+    ov["unet_name"] = await pick("UNETLoader", "unet_name", WAN_UNET_CANDS)
+    ov["clip_name"] = await pick("CLIPLoader", "clip_name", WAN_TE_CANDS)
+    ov["vae_name"] = await pick("VAELoader", "vae_name", WAN_VAE_CANDS)
+    miss = [k for k, v in ov.items() if v is None]
+    if miss:
+        raise RuntimeError(f"Wan 2.1 缺少模型文件: {miss}，请按 README 下载放入对应目录")
+    return ov
+
+
+WAN_T2V = Template(
+    id="wan-2.1-1.3b-t2v",
+    name="Wan 2.1 1.3B 文生视频（480p 轻量）",
+    capability="text-to-video",
+    params_model=WanT2VParams,
+    builder=build_wan_t2v,
+    required_models=[
+        ("UNETLoader", "unet_name", WAN_UNET_CANDS),
+        ("CLIPLoader", "clip_name", WAN_TE_CANDS),
+        ("VAELoader", "vae_name", WAN_VAE_CANDS),
+    ],
+    resolver=_resolve_wan,
+)
+TEMPLATES[WAN_T2V.id] = WAN_T2V
+
+
+# ============ FastHunyuan 文生视频（720p 6步蒸馏档） ============
+
+class FastHYT2VParams(BaseModel):
+    prompt: str = Field(min_length=1, max_length=8000)
+    width: int = Field(default=1280, ge=256, le=1920, multiple_of=16)
+    height: int = Field(default=720, ge=256, le=1920, multiple_of=16)
+    length: int = Field(default=125, ge=9, le=201)
+    steps: int = Field(default=6, ge=1, le=60)        # 官方蒸馏：6 步
+    cfg: float = Field(default=7.0, ge=1.0, le=15.0)  # 官方建议 >6
+    fps: float = Field(default=24.0, ge=8.0, le=60.0)
+    seed: int | None = None
+
+    @field_validator("length")
+    @classmethod
+    def _length_4n1(cls, v: int) -> int:
+        if (v - 1) % 4 != 0:
+            raise ValueError("帧数须为 4n+1（如 49/121/125）")
+        return v
+
+FASTHY_GGUF_CANDS = ["fast-hunyuan-video-t2v-720p-Q3_K_S.gguf",
+                     "fast-hunyuan-video-t2v-720p-Q3_K_M.gguf",
+                     "fast-hunyuan-video-t2v-720p-Q4_K_S.gguf"]
+FASTHY_TE_CANDS = ["llava_llama3_fp8_scaled.safetensors", "llava_llama3_fp16.safetensors"]
+FASTHY_VAE_CANDS = ["hunyuan_video_vae_bf16.safetensors", "hunyuan_video_vae_fp32.safetensors"]
+FASTHY_NEGATIVE = ("low quality, worst quality, blurry, watermark, text, deformed, "
+                   "distorted, flickering")
+
+
+def build_fasthy_t2v(p: FastHYT2VParams, overrides: dict | None = None) -> dict:
+    ov = overrides or {}
+    unet = ov.get("unet_name", FASTHY_GGUF_CANDS[0])
+    te = ov.get("clip_name", FASTHY_TE_CANDS[0])
+    vae = ov.get("vae_name", FASTHY_VAE_CANDS[0])
+    seed = p.seed if p.seed is not None else random.randint(0, 2**48)
+    return {
+        "1": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": unet}},
+        "2": {"class_type": "CLIPLoader",
+              "inputs": {"clip_name": te, "type": "hunyuan_video"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
+        "4": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": p.prompt}},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": FASTHY_NEGATIVE}},
+        "6": {"class_type": "ModelSamplingSD3", "inputs": {"model": ["1", 0], "shift": 17.0}},
+        "7": {"class_type": "EmptyHunyuanLatentVideo",
+              "inputs": {"width": p.width, "height": p.height, "length": p.length,
+                         "batch_size": 1}},
+        "8": {"class_type": "KSampler",
+              "inputs": {"model": ["6", 0], "positive": ["4", 0], "negative": ["5", 0],
+                         "latent_image": ["7", 0], "seed": seed, "steps": p.steps,
+                         "cfg": p.cfg, "sampler_name": "euler", "scheduler": "simple",
+                         "denoise": 1.0}},
+        "9": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["3", 0]}},
+        "10": {"class_type": "CreateVideo", "inputs": {"images": ["9", 0], "fps": p.fps}},
+        "11": {"class_type": "SaveVideo",
+               "inputs": {"video": ["10", 0], "filename_prefix": "zimg", "format": "mp4",
+                          "codec": "auto"}},
+    }
+
+
+async def _resolve_fasthy(engine) -> dict:
+    async def pick(node, field, cands):
+        opts = await engine.model_options(node, field)
+        for c in cands:
+            if c in opts:
+                return c
+        return None
+    ov = {}
+    ov["unet_name"] = await pick("UnetLoaderGGUF", "unet_name", FASTHY_GGUF_CANDS)
+    ov["clip_name"] = await pick("CLIPLoader", "clip_name", FASTHY_TE_CANDS)
+    ov["vae_name"] = await pick("VAELoader", "vae_name", FASTHY_VAE_CANDS)
+    miss = [k for k, v in ov.items() if v is None]
+    if miss:
+        raise RuntimeError(f"FastHunyuan 缺少模型文件: {miss}，请按 README 下载放入对应目录")
+    return ov
+
+
+FASTHY_T2V = Template(
+    id="fast-hunyuan-t2v-720p",
+    name="FastHunyuan 文生视频（720p 6步蒸馏）",
+    capability="text-to-video",
+    params_model=FastHYT2VParams,
+    builder=build_fasthy_t2v,
+    required_models=[
+        ("UnetLoaderGGUF", "unet_name", FASTHY_GGUF_CANDS),
+        ("CLIPLoader", "clip_name", FASTHY_TE_CANDS),
+        ("VAELoader", "vae_name", FASTHY_VAE_CANDS),
+    ],
+    resolver=_resolve_fasthy,
+)
+TEMPLATES[FASTHY_T2V.id] = FASTHY_T2V

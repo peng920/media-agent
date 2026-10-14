@@ -55,3 +55,23 @@ cd backend && uv run pytest -q        # 离线单测（假引擎）
 - `vae/ltx-2.3-22b-dev_video_vae.safetensors`、`vae/ltx-2.3-22b-dev_audio_vae.safetensors`
 - 文本编码器经 `DualCLIPLoaderGGUF(type=ltxv)` 加载——需引擎以**较新代码**启动（ComfyUI 核心 v0.39+ 的 `DualCLIPLoader` type 枚举含 ltxv；若引擎启动过早需重启进程）
 - 本机 ComfyUI-GGUF 有本地补丁（qwen3vl mmproj 合并支持），已提交到其本地 git 分支，更新该节点仓库时注意保留
+
+### LTX-Video 2B 蒸馏版 前置（低显存档）
+
+- `diffusion_models/ltxv-2b-0.9.6-distilled-04-25.safetensors`（Lightricks/LTX-Video，5.9G）
+- `text_encoders/t5-v1_1-xxl-encoder-Q4_K_M.gguf`（city96/t5-v1_1-xxl-encoder-gguf，4.2G）
+- `vae/ltxv_vae.safetensors`（Lightricks/LTX-Video 的 `vae/diffusion_pytorch_model.safetensors` 改名，1.6G）
+
+### Wan 2.1 1.3B 文生视频 前置（Comfy-Org 重打包）
+
+- `diffusion_models/wan2.1_t2v_1.3B_fp16.safetensors`（2.6G）
+- `text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors`（6.3G）
+- `vae/wan_2.1_vae.safetensors`（0.24G）
+- 仓库：`Comfy-Org/Wan_2.1_ComfyUI_repackaged` 的 `split_files/` 对应子目录
+
+### FastHunyuan 文生视频 前置（720p 6步蒸馏）
+
+- `diffusion_models/fast-hunyuan-video-t2v-720p-Q3_K_S.gguf`（city96/FastHunyuan-gguf，5.7G）
+- `text_encoders/llava_llama3_fp8_scaled.safetensors`（Comfy-Org/HunyuanVideo_repackaged，8.5G）
+- `vae/hunyuan_video_vae_bf16.safetensors`（同上仓库，0.46G）
+- 官方推荐参数已内置：6 步 / shift 17 / CFG 7 / 1280×720×125 帧
