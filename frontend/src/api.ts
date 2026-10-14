@@ -65,3 +65,19 @@ export const cancelJob = (id: number) =>
 
 export const getHealth = () =>
   api<{ db: boolean; engine: boolean; engine_version: string }>('/api/health')
+
+export async function uploadImage(file: File): Promise<{ image: string; url: string }> {
+  const token = localStorage.getItem('token') ?? ''
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch('/api/uploads', {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  })
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { detail?: string }
+    throw new ApiError(body.detail ?? `上传失败 HTTP ${res.status}`)
+  }
+  return res.json()
+}

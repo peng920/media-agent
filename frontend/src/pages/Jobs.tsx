@@ -98,13 +98,18 @@ export default function Jobs() {
       title: '产物',
       dataIndex: 'outputs',
       render: (outputs: JobItem['outputs']) => (
-        <Image.PreviewGroup>
-          <Space>
-            {outputs.map((o) => (
-              <Image key={o.url} src={o.url} width={72} height={72} style={{ objectFit: 'cover' }} />
-            ))}
-          </Space>
-        </Image.PreviewGroup>
+        <Space>
+          {outputs.map((o) =>
+            /\.(mp4|webm|mov)$/i.test(o.url) ? (
+              <video key={o.url} src={o.url} controls width={200}
+                style={{ borderRadius: 8, background: '#000' }} />
+            ) : (
+              <Image.PreviewGroup key={o.url}>
+                <Image src={o.url} width={72} height={72} style={{ objectFit: 'cover' }} />
+              </Image.PreviewGroup>
+            ),
+          )}
+        </Space>
       ),
     },
     {
