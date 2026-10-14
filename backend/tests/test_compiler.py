@@ -4,7 +4,10 @@ from app.compiler.templates import (TEMPLATES, QwenT2IParams, build_qwen_t2i,
                                     LtxI2VParams, build_ltx_i2v,
                                     Ltx2bI2VParams, build_ltx_2b_i2v,
                                     WanT2VParams, build_wan_t2v,
-                                    FastHYT2VParams, build_fasthy_t2v, validate_models)
+                                    FastHYT2VParams, build_fasthy_t2v,
+                                    ZImageTurboParams, build_zimage_turbo,
+                                    Flux2KleinParams, build_flux2_klein,
+                                    validate_models)
 
 
 def test_build_qwen_t2i():
@@ -140,9 +143,30 @@ def test_build_wan_t2v():
 def test_build_fasthy_t2v():
     g = build_fasthy_t2v(FastHYT2VParams(prompt="ocean waves at sunset"))
     assert g["1"]["class_type"] == "UnetLoaderGGUF"
+    assert g["2"]["class_type"] == "DualCLIPLoader"   # clip_l + llava 双编码器
     assert g["2"]["inputs"]["type"] == "hunyuan_video"
+    assert g["2"]["inputs"]["clip_name1"] == "clip_l.safetensors"
+    assert g["2"]["inputs"]["clip_name2"] == "llava_llama3_fp8_scaled.safetensors"
     assert g["6"]["inputs"]["shift"] == 17.0          # FastHunyuan 官方 shift
     assert g["8"]["inputs"]["steps"] == 6 and g["8"]["inputs"]["cfg"] == 7.0
+
+
+def test_build_zimage_turbo():
+    g = build_zimage_turbo(ZImageTurboParams(prompt="a cat"))
+    assert g["2"]["inputs"]["type"] == "lumina2"      # Qwen3-4B TE 走 lumina2 挂载
+    assert g["8"]["inputs"]["shift"] == 3.0           # 官方 AuraFlow shift
+    assert g["9"]["inputs"]["cfg"] == 1.0 and g["9"]["inputs"]["steps"] == 8
+    assert g["9"]["inputs"]["sampler_name"] == "res_multistep"
+    assert g["11"]["class_type"] == "SaveImage"
+
+
+def test_build_flux2_klein():
+    g = build_flux2_klein(Flux2KleinParams(prompt="a cat"))
+    assert g["2"]["inputs"]["type"] == "flux2"
+    assert g["8"]["inputs"]["steps"] == 4             # Flux2Scheduler 蒸馏 4 步
+    assert g["10"]["inputs"]["cfg"] == 1.0
+    assert g["13"]["class_type"] == "SamplerCustomAdvanced"
+    assert g["15"]["class_type"] == "SaveImage"
 
 
 def test_t2v_length_validators():

@@ -463,6 +463,7 @@ FASTHY_GGUF_CANDS = ["fast-hunyuan-video-t2v-720p-Q3_K_S.gguf",
                      "fast-hunyuan-video-t2v-720p-Q3_K_M.gguf",
                      "fast-hunyuan-video-t2v-720p-Q4_K_S.gguf"]
 FASTHY_TE_CANDS = ["llava_llama3_fp8_scaled.safetensors", "llava_llama3_fp16.safetensors"]
+FASTHY_CLIP_L_CANDS = ["clip_l.safetensors", "clip_l_fp16.safetensors"]
 FASTHY_VAE_CANDS = ["hunyuan_video_vae_bf16.safetensors", "hunyuan_video_vae_fp32.safetensors"]
 FASTHY_NEGATIVE = ("low quality, worst quality, blurry, watermark, text, deformed, "
                    "distorted, flickering")
@@ -471,13 +472,16 @@ FASTHY_NEGATIVE = ("low quality, worst quality, blurry, watermark, text, deforme
 def build_fasthy_t2v(p: FastHYT2VParams, overrides: dict | None = None) -> dict:
     ov = overrides or {}
     unet = ov.get("unet_name", FASTHY_GGUF_CANDS[0])
-    te = ov.get("clip_name", FASTHY_TE_CANDS[0])
+    te = ov.get("clip_name2", FASTHY_TE_CANDS[0])
+    clip_l = ov.get("clip_name1", FASTHY_CLIP_L_CANDS[0])
     vae = ov.get("vae_name", FASTHY_VAE_CANDS[0])
     seed = p.seed if p.seed is not None else random.randint(0, 2**48)
     return {
         "1": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": unet}},
-        "2": {"class_type": "CLIPLoader",
-              "inputs": {"clip_name": te, "type": "hunyuan_video"}},
+        # HunyuanVideo 系文本编码器 = clip_l + llava 双编码器（官方模板接线）
+        "2": {"class_type": "DualCLIPLoader",
+              "inputs": {"clip_name1": clip_l, "clip_name2": te,
+                         "type": "hunyuan_video"}},
         "3": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
         "4": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": p.prompt}},
         "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": FASTHY_NEGATIVE}},
@@ -507,7 +511,8 @@ async def _resolve_fasthy(engine) -> dict:
         return None
     ov = {}
     ov["unet_name"] = await pick("UnetLoaderGGUF", "unet_name", FASTHY_GGUF_CANDS)
-    ov["clip_name"] = await pick("CLIPLoader", "clip_name", FASTHY_TE_CANDS)
+    ov["clip_name2"] = await pick("DualCLIPLoader", "clip_name2", FASTHY_TE_CANDS)
+    ov["clip_name1"] = await pick("DualCLIPLoader", "clip_name1", FASTHY_CLIP_L_CANDS)
     ov["vae_name"] = await pick("VAELoader", "vae_name", FASTHY_VAE_CANDS)
     miss = [k for k, v in ov.items() if v is None]
     if miss:
@@ -523,9 +528,123 @@ FASTHY_T2V = Template(
     builder=build_fasthy_t2v,
     required_models=[
         ("UnetLoaderGGUF", "unet_name", FASTHY_GGUF_CANDS),
-        ("CLIPLoader", "clip_name", FASTHY_TE_CANDS),
+        ("DualCLIPLoader", "clip_name2", FASTHY_TE_CANDS),
+        ("DualCLIPLoader", "clip_name1", FASTHY_CLIP_L_CANDS),
         ("VAELoader", "vae_name", FASTHY_VAE_CANDS),
     ],
     resolver=_resolve_fasthy,
 )
 TEMPLATES[FASTHY_T2V.id] = FASTHY_T2V
+
+
+# ============ Z-Image Turbo 文生图（T4/Turing 可用的 bf16 档，替代 Qwen-Image 2.1） ============
+
+class ZImageTurboParams(BaseModel):
+    prompt: str = Field(min_length=1, max_length=4000)
+    width: int = Field(default=1024, ge=256, le=2048, multiple_of=32)
+    height: int = Field(default=1024, ge=256, le=2048, multiple_of=32)
+    steps: int = Field(default=8, ge=1, le=50)
+    seed: int | None = None
+
+
+ZIMAGE_UNET = "z_image_turbo_bf16.safetensors"
+# TE 与 FLUX.2-klein 共用同一份 Qwen3-4B
+QWEN3_4B_CANDS = ["qwen_3_4b.safetensors"]
+ZIMAGE_VAE = "ae.safetensors"
+
+
+def build_zimage_turbo(p: ZImageTurboParams, overrides: dict | None = None) -> dict:
+    ov = overrides or {}
+    te = ov.get("clip_name", QWEN3_4B_CANDS[0])
+    seed = p.seed if p.seed is not None else random.randint(0, 2**48)
+    return {
+        "1": {"class_type": "UNETLoader",
+              "inputs": {"unet_name": ZIMAGE_UNET, "weight_dtype": "default"}},
+        "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": te, "type": "lumina2"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": ZIMAGE_VAE}},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": p.prompt}},
+        "6": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["5", 0]}},
+        "7": {"class_type": "EmptySD3LatentImage",
+              "inputs": {"width": p.width, "height": p.height, "batch_size": 1}},
+        "8": {"class_type": "ModelSamplingAuraFlow", "inputs": {"model": ["1", 0], "shift": 3.0}},
+        "9": {"class_type": "KSampler",
+              "inputs": {"model": ["8", 0], "positive": ["5", 0], "negative": ["6", 0],
+                         "latent_image": ["7", 0], "seed": seed, "steps": p.steps,
+                         "cfg": 1.0, "sampler_name": "res_multistep", "scheduler": "simple",
+                         "denoise": 1.0}},
+        "10": {"class_type": "VAEDecode", "inputs": {"samples": ["9", 0], "vae": ["3", 0]}},
+        "11": {"class_type": "SaveImage", "inputs": {"images": ["10", 0], "filename_prefix": "zimg"}},
+    }
+
+
+ZIMAGE_TURBO = Template(
+    id="z-image-turbo",
+    name="Z-Image Turbo 文生图（6B 轻量）",
+    capability="text-to-image",
+    params_model=ZImageTurboParams,
+    builder=build_zimage_turbo,
+    required_models=[
+        ("UNETLoader", "unet_name", ZIMAGE_UNET),
+        ("CLIPLoader", "clip_name", QWEN3_4B_CANDS),
+        ("VAELoader", "vae_name", ZIMAGE_VAE),
+    ],
+)
+TEMPLATES[ZIMAGE_TURBO.id] = ZIMAGE_TURBO
+
+
+# ============ FLUX.2 klein 4B 文生视频（蒸馏档 4 步） ============
+
+class Flux2KleinParams(BaseModel):
+    prompt: str = Field(min_length=1, max_length=4000)
+    width: int = Field(default=1024, ge=256, le=2048, multiple_of=32)
+    height: int = Field(default=1024, ge=256, le=2048, multiple_of=32)
+    steps: int = Field(default=4, ge=1, le=50)   # 蒸馏档 4 步
+    seed: int | None = None
+
+
+KLEIN_UNET_CANDS = ["flux-2-klein-4b.safetensors", "flux-2-klein-4b-fp8.safetensors"]
+KLEIN_VAE = "flux2-vae.safetensors"
+
+
+def build_flux2_klein(p: Flux2KleinParams, overrides: dict | None = None) -> dict:
+    ov = overrides or {}
+    unet = ov.get("unet_name", KLEIN_UNET_CANDS[0])
+    te = ov.get("clip_name", QWEN3_4B_CANDS[0])
+    seed = p.seed if p.seed is not None else random.randint(0, 2**48)
+    return {
+        "1": {"class_type": "UNETLoader",
+              "inputs": {"unet_name": unet, "weight_dtype": "default"}},
+        "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": te, "type": "flux2"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": KLEIN_VAE}},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": p.prompt}},
+        "6": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["5", 0]}},
+        "7": {"class_type": "EmptyFlux2LatentImage",
+              "inputs": {"width": p.width, "height": p.height, "batch_size": 1}},
+        "8": {"class_type": "Flux2Scheduler",
+              "inputs": {"steps": p.steps, "width": p.width, "height": p.height}},
+        "10": {"class_type": "CFGGuider",
+               "inputs": {"model": ["1", 0], "positive": ["5", 0], "negative": ["6", 0],
+                          "cfg": 1.0}},
+        "11": {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}},
+        "12": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+        "13": {"class_type": "SamplerCustomAdvanced",
+               "inputs": {"noise": ["11", 0], "guider": ["10", 0], "sampler": ["12", 0],
+                          "sigmas": ["8", 0], "latent_image": ["7", 0]}},
+        "14": {"class_type": "VAEDecode", "inputs": {"samples": ["13", 0], "vae": ["3", 0]}},
+        "15": {"class_type": "SaveImage", "inputs": {"images": ["14", 0], "filename_prefix": "zimg"}},
+    }
+
+
+FLUX2_KLEIN = Template(
+    id="flux2-klein-4b",
+    name="FLUX.2 klein 4B 文生图（蒸馏 4 步）",
+    capability="text-to-image",
+    params_model=Flux2KleinParams,
+    builder=build_flux2_klein,
+    required_models=[
+        ("UNETLoader", "unet_name", KLEIN_UNET_CANDS),
+        ("CLIPLoader", "clip_name", QWEN3_4B_CANDS),
+        ("VAELoader", "vae_name", KLEIN_VAE),
+    ],
+)
+TEMPLATES[FLUX2_KLEIN.id] = FLUX2_KLEIN

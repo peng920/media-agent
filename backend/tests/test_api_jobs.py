@@ -23,7 +23,7 @@ def test_templates_endpoint(client):
     r = client.get("/api/templates")
     assert r.status_code == 200
     data = r.json()
-    assert len(data) == 5
+    assert len(data) == 7
     by_id = {t["id"]: t for t in data}
     qwen = by_id["qwen-image-2.1-turbo"]
     assert qwen["defaults"]["width"] == 1024
@@ -42,6 +42,10 @@ def test_templates_endpoint(client):
     fhy = by_id["fast-hunyuan-t2v-720p"]
     assert fhy["missing_models"] == []
     assert fhy["defaults"]["steps"] == 6 and fhy["defaults"]["cfg"] == 7.0
+    zi = by_id["z-image-turbo"]
+    assert zi["capability"] == "text-to-image" and zi["missing_models"] == []
+    kl = by_id["flux2-klein-4b"]
+    assert kl["capability"] == "text-to-image" and kl["missing_models"] == []
 
 
 def test_submit_and_isolation(client):

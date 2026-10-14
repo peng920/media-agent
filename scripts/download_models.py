@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["modelscope>=1.18"]
+# dependencies = ["modelscope>=1.18", "safetensors", "torch==2.7.1"]
 # ///
 """按模板清单从 ModelScope 下载模型文件到 ComfyUI models 目录。
 
@@ -24,8 +24,11 @@ import sys
 import urllib.request
 from pathlib import Path
 
-# (组, 仓库, 仓库内路径, 目标相对 models 目录的路径)
-MANIFEST: list[tuple[str, str, str, str]] = [
+# (组, 仓库, 仓库内路径, 目标相对 models 目录的路径 [, 抽取前缀])
+# 抽取前缀：从单文件 checkpoint 里抽出该前缀的键另存（用于 LTX 旧版 VAE——
+# Lightricks 仓库的 vae/diffusion_pytorch_model.safetensors 已被替换为 LTX 2.x
+# 新格式，与 0.9.x DiT 不兼容；旧 VAE 只能从 0.9.5 checkpoint 抽取）
+MANIFEST: list[tuple] = [
     # ---- qwen-t2i：Qwen-Image 2.1 Turbo（turbo 裸跑，不用 LoRA）----
     ("qwen-t2i", "Comfy-Org/Qwen-Image-2.1",
      "diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors",
@@ -45,10 +48,9 @@ MANIFEST: list[tuple[str, str, str, str]] = [
     ("ltx-2b", "Lightricks/LTX-Video",
      "ltxv-2b-0.9.6-distilled-04-25.safetensors",
      "diffusion_models/ltxv-2b-0.9.6-distilled-04-25.safetensors"),
-    # VAE 原名 diffusion_pytorch_model.safetensors，落盘改名为模板期望的 ltxv_vae
     ("ltx-2b", "Lightricks/LTX-Video",
-     "vae/diffusion_pytorch_model.safetensors",
-     "vae/ltxv_vae.safetensors"),
+     "ltx-video-2b-v0.9.5.safetensors",
+     "vae/ltxv_vae.safetensors", "vae."),
     ("ltx-2b", "city96/t5-v1_1-xxl-encoder-gguf",
      "t5-v1_1-xxl-encoder-Q4_K_M.gguf",
      "text_encoders/t5-v1_1-xxl-encoder-Q4_K_M.gguf"),
@@ -70,8 +72,32 @@ MANIFEST: list[tuple[str, str, str, str]] = [
      "split_files/text_encoders/llava_llama3_fp8_scaled.safetensors",
      "text_encoders/llava_llama3_fp8_scaled.safetensors"),
     ("fasthy", "Comfy-Org/HunyuanVideo_repackaged",
+     "split_files/text_encoders/clip_l.safetensors",
+     "text_encoders/clip_l.safetensors"),
+    ("fasthy", "Comfy-Org/HunyuanVideo_repackaged",
      "split_files/vae/hunyuan_video_vae_bf16.safetensors",
      "vae/hunyuan_video_vae_bf16.safetensors"),
+    # ---- zimage：Z-Image Turbo 文生图（bf16 档，T4/Turing 可用）----
+    ("zimage", "Comfy-Org/z_image_turbo",
+     "split_files/diffusion_models/z_image_turbo_bf16.safetensors",
+     "diffusion_models/z_image_turbo_bf16.safetensors"),
+    ("zimage", "Comfy-Org/z_image_turbo",
+     "split_files/vae/ae.safetensors",
+     "vae/ae.safetensors"),
+    # Qwen3-4B TE：z-image 与 flux2-klein 共用
+    ("zimage", "Comfy-Org/z_image_turbo",
+     "split_files/text_encoders/qwen_3_4b.safetensors",
+     "text_encoders/qwen_3_4b.safetensors"),
+    # ---- klein：FLUX.2 klein 4B 文生图（蒸馏 4 步）----
+    ("klein", "Comfy-Org/flux2-klein-4B",
+     "split_files/diffusion_models/flux-2-klein-4b.safetensors",
+     "diffusion_models/flux-2-klein-4b.safetensors"),
+    ("klein", "Comfy-Org/flux2-klein-4B",
+     "split_files/vae/flux2-vae.safetensors",
+     "vae/flux2-vae.safetensors"),
+    ("klein", "Comfy-Org/flux2-klein-4B",
+     "split_files/text_encoders/qwen_3_4b.safetensors",
+     "text_encoders/qwen_3_4b.safetensors"),
 ]
 
 GROUP_LABELS = {
@@ -79,6 +105,8 @@ GROUP_LABELS = {
     "ltx-2b": "LTX-Video 2B 蒸馏版 图生视频（低显存档）",
     "wan-t2v": "Wan 2.1 1.3B 文生视频 480p",
     "fasthy": "FastHunyuan 文生视频 720p 6步",
+    "zimage": "Z-Image Turbo 文生图（T4 可用，替代 Qwen 2.1）",
+    "klein": "FLUX.2 klein 4B 文生图（蒸馏 4 步）",
 }
 
 
@@ -99,11 +127,30 @@ def remote_size(repo: str, path: str) -> int | None:
     return None
 
 
+def extract_prefix_tensors(src: Path, target: Path, prefix: str) -> bool:
+    """从单文件 checkpoint 抽取 prefix 开头的键，去掉前缀后另存。"""
+    from safetensors import safe_open
+    from safetensors.torch import save_file
+
+    tensors = {}
+    with safe_open(str(src), framework="pt", device="cpu") as f:
+        for k in f.keys():
+            if k.startswith(prefix):
+                tensors[k[len(prefix):]] = f.get_tensor(k)
+    if not tensors:
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    save_file(tensors, str(target))
+    return True
+
+
 def download_one(idx: int, total: int, repo: str, path: str, target: Path,
-                 tmp_root: Path) -> bool:
-    print(f"[{idx}/{total}] {target.name}  <-  {repo}/{path}")
-    tmp_dir = tmp_root / f"{idx:02d}"
+                 tmp_root: Path, prefix: str | None = None) -> bool:
+    print(f"[{idx}/{total}] {target.name}  <-  {repo}/{path}" +
+          (f"  (抽取 '{prefix}*' 键)" if prefix else ""))
+    tmp_dir = tmp_root / f"{idx:02d}_{path.split('/')[-1][:24]}"
     tmp_dir.mkdir(parents=True, exist_ok=True)
+    ok = False
     try:
         from modelscope.hub.snapshot_download import snapshot_download
         snapshot_download(model_id=repo, local_dir=str(tmp_dir),
@@ -113,18 +160,25 @@ def download_one(idx: int, total: int, repo: str, path: str, target: Path,
             print(f"  [fail] 下载后未找到文件: {src}")
             return False
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(src), target)
-        size = remote_size(repo, path)
-        if size and target.stat().st_size != size:
-            print(f"  [warn] 大小不符：本地 {target.stat().st_size} vs 远端 {size}，请重跑校验")
-            return False
+        if prefix:
+            if not extract_prefix_tensors(src, target, prefix):
+                print(f"  [fail] checkpoint 中没有 '{prefix}*' 键")
+                return False
+        else:
+            shutil.move(str(src), target)
+            size = remote_size(repo, path)
+            if size and target.stat().st_size != size:
+                print(f"  [warn] 大小不符：本地 {target.stat().st_size} vs 远端 {size}，请重跑校验")
+                return False
         print(f"  [ok] {target}  ({target.stat().st_size / 1e9:.2f}GB)")
+        ok = True
         return True
     except Exception as e:
-        print(f"  [fail] {e}")
+        print(f"  [fail] {e}（临时目录保留以续传: {tmp_dir}）")
         return False
     finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        if ok:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def main() -> int:
@@ -145,24 +199,26 @@ def main() -> int:
         drop = {g.strip() for g in args.skip.split(",")}
         entries = [e for e in entries if e[0] not in drop]
 
-    todo: list[tuple[str, str, str, Path]] = []
+    todo: list[tuple] = []
     print(f"目标目录: {models_dir}\n")
     last_group = None
-    for group, repo, path, target_rel in entries:
+    for entry in entries:
+        group, repo, path, target_rel = entry[0], entry[1], entry[2], entry[3]
+        prefix = entry[4] if len(entry) > 4 else None
         if group != last_group:
             print(f"— {group}: {GROUP_LABELS.get(group, '')}")
             last_group = group
         target = models_dir / target_rel
         if target.is_file() and target.stat().st_size > 0:
-            size = remote_size(repo, path)
-            mark = "存在" if (size is None or size == target.stat().st_size) \
-                else f"大小异常(本地 {target.stat().st_size / 1e9:.2f}GB)"
-            print(f"    [{mark}] {target_rel}")
-            if mark == "存在":
+            # 抽取条目无法对照远端大小（源是 checkpoint），存在即视为就绪；
+            # 如需重新抽取请先删除目标文件
+            if prefix or (remote_size(repo, path) == target.stat().st_size):
+                print(f"    [存在] {target_rel}")
                 continue
+            print(f"    [大小异常] {target_rel}")
         else:
             print(f"    [缺失] {target_rel}")
-        todo.append((group, repo, path, target))
+        todo.append((group, repo, path, target, prefix))
 
     if args.list:
         return 0
@@ -171,17 +227,21 @@ def main() -> int:
         return 0
 
     total_bytes = 0
-    for _, repo, path, _t in todo:
+    for _, repo, path, _t, _p in todo:
         s = remote_size(repo, path)
         total_bytes += s or 0
     print(f"\n待下载 {len(todo)} 个文件，约 {total_bytes / 1e9:.1f}GB\n")
 
     tmp_root = models_dir / ".ms_tmp"
     failed = []
-    for i, (group, repo, path, target) in enumerate(todo, 1):
-        if not download_one(i, len(todo), repo, path, target, tmp_root):
+    for i, (group, repo, path, target, prefix) in enumerate(todo, 1):
+        if not download_one(i, len(todo), repo, path, target, tmp_root, prefix):
             failed.append(f"{repo}/{path} -> {target}")
-    shutil.rmtree(tmp_root, ignore_errors=True)
+    # 仅当整个 .ms_tmp 为空时才移除根目录（避免误删并发运行的临时文件）
+    try:
+        tmp_root.rmdir()
+    except OSError:
+        pass
 
     if failed:
         print("\n以下文件失败，可重跑本脚本续传：")
