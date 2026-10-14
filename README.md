@@ -43,4 +43,15 @@ cd backend && uv run pytest -q        # 离线单测（假引擎）
 ## M1 边界
 
 单槽队列、文生图模板（Qwen-Image 2.1 Turbo）、HMAC 认证与多用户隔离、WS 进度事件、产物按用户落盘 `data/users/{uid}/outputs/{job_id}/`。
+**M2 进行中**：LTX-2.3 图生视频模板（音视频联合生成，unsloth GGUF 配方）、图片上传（`POST /api/uploads`，落引擎 `input/` 目录）、视频产物预览。
 多步 DSL 链、显存 Profile、Agent、加密狗 → M2+（见设计文档 §8）。
+
+### LTX-2.3 图生视频前置（GGUF 路线）
+
+- `diffusion_models/ltx-2.3-22b-dev-Q3_K_S.gguf`（unsloth）
+- `text_encoders/gemma-3-12b-it-qat-UD-Q4_K_XL.gguf`
+  `https://hf-mirror.com/unsloth/gemma-3-12b-it-qat-GGUF/resolve/main/gemma-3-12b-it-qat-UD-Q4_K_XL.gguf`
+- `text_encoders/ltx-2.3-22b-dev_embeddings_connectors.safetensors`（unsloth）
+- `vae/ltx-2.3-22b-dev_video_vae.safetensors`、`vae/ltx-2.3-22b-dev_audio_vae.safetensors`
+- 文本编码器经 `DualCLIPLoaderGGUF(type=ltxv)` 加载——需引擎以**较新代码**启动（ComfyUI 核心 v0.39+ 的 `DualCLIPLoader` type 枚举含 ltxv；若引擎启动过早需重启进程）
+- 本机 ComfyUI-GGUF 有本地补丁（qwen3vl mmproj 合并支持），已提交到其本地 git 分支，更新该节点仓库时注意保留
