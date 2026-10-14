@@ -15,7 +15,7 @@ from tests.fakes import FakeEngine
 def _make_job(settings, n=1):
     sf = appdb.session_factory(settings)
     with next(sf()) as s:
-        jobs = [Job(user_id=1, template_id="qwen-image-2.1-turbo",
+        jobs = [Job(user_id=1, template_id="z-image-turbo",
                     params=json.dumps({"prompt": "cat"})) for _ in range(n)]
         for j in jobs:
             s.add(j)
@@ -47,7 +47,8 @@ async def test_lifecycle_done(settings, patched_download):
         ev2 = await asyncio.wait_for(q.get(), 5)
         assert ev2["status"] == "DONE"
         assert ev2["outputs"][0]["url"] == f"/files/users/1/outputs/{job.id}/{job.id}_0_a.png"
-        assert fake.submitted and fake.submitted[0]["9"]["class_type"] == "SaveImage"
+        assert fake.submitted and any(n["class_type"] == "SaveImage"
+                                      for n in fake.submitted[0].values())
     finally:
         task.cancel()
 
@@ -105,8 +106,8 @@ async def test_single_slot_serializes(settings, patched_download):
         task.cancel()
 
 
-async def test_ltx_video_job_lifecycle(settings, patched_download):
-    """LTX 图生视频：视频产物（videos 键）也要落盘并可访问。"""
+async def test_video_job_lifecycle(settings, patched_download):
+    """图生视频：视频产物（videos 键）也要落盘并可访问。"""
     from tests.fakes import FAKE_HISTORY_VIDEO
 
     class VideoEngine(FakeEngine):
@@ -118,7 +119,7 @@ async def test_ltx_video_job_lifecycle(settings, patched_download):
     sched = Scheduler(VideoEngine(), appdb.session_factory(settings), settings, notifier)
     sf = appdb.session_factory(settings)
     with next(sf()) as s:
-        job = Job(user_id=1, template_id="ltx-2.3-i2v",
+        job = Job(user_id=1, template_id="ltx-2b-i2v-distilled",
                   params=json.dumps({"prompt": "cat walks", "image": "zimg_1_x.png"}))
         s.add(job)
         s.commit()

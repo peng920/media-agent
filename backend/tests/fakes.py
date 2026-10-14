@@ -34,33 +34,24 @@ class FakeEngine:
         return {"system": {"comfyui_version": "0.39.0-test"}}
 
     async def model_options(self, node, field):
-        # 与 app.compiler.templates 的模型清单对齐；LoRA 故意缺席 → 可选缺失路径
+        # 与 app.compiler.templates 的模型清单对齐（当前 5 个模板所需）
         return {
-            ("CLIPLoader", "clip_name"): ["qwen3vl_8b_w4a8.safetensors",
-                                          "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+            ("CLIPLoader", "clip_name"): ["umt5_xxl_fp8_e4m3fn_scaled.safetensors",
                                           "qwen_3_4b.safetensors"],
             ("CLIPLoaderGGUF", "clip_name"): ["t5-v1_1-xxl-encoder-Q4_K_M.gguf"],
-            ("UNETLoader", "unet_name"): ["qwen_image_2.1_turbo_int8_convrot.safetensors",
-                                          "ltxv-2b-0.9.6-distilled-04-25.safetensors",
+            ("UNETLoader", "unet_name"): ["ltxv-2b-0.9.6-distilled-04-25.safetensors",
                                           "wan2.1_t2v_1.3B_fp16.safetensors",
                                           "z_image_turbo_bf16.safetensors",
                                           "flux-2-klein-4b.safetensors",
                                           "hunyuanvideo1.5_480p_i2v_step_distilled_fp8_scaled.safetensors"],
-            ("VAELoader", "vae_name"): ["qwen_image_2.1_vae_bf16.safetensors",
-                                        "ltxv_vae.safetensors",
+            ("VAELoader", "vae_name"): ["ltxv_vae.safetensors",
                                         "wan_2.1_vae.safetensors",
                                         "ae.safetensors",
                                         "flux2-vae.safetensors",
                                         "hunyuanvideo15_vae_fp16.safetensors"],
-            ("UnetLoaderGGUF", "unet_name"): [],
             ("DualCLIPLoader", "clip_name1"): ["qwen_2.5_vl_7b_fp8_scaled.safetensors"],
             ("DualCLIPLoader", "clip_name2"): ["byt5_small_glyphxl_fp16.safetensors"],
             ("CLIPVisionLoader", "clip_name"): ["sigclip_vision_patch14_384.safetensors"],
-            ("DualCLIPLoaderGGUF", "clip_name1"): ["gemma-3-12b-it-qat-UD-Q4_K_XL.gguf"],
-            ("DualCLIPLoaderGGUF", "clip_name2"):
-                ["ltx-2.3-22b-dev_embeddings_connectors.safetensors"],
-            ("VAELoaderKJ", "vae_name"): ["ltx-2.3-22b-dev_video_vae.safetensors",
-                                          "ltx-2.3-22b-dev_audio_vae.safetensors"],
         }.get((node, field), [])
 
 

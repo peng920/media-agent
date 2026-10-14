@@ -7,17 +7,13 @@
 ## 前置条件
 
 1. 本机 ComfyUI 已运行于 `http://127.0.0.1:8188`（attach 模式，控制面不管理引擎进程；本机启动方式见下文「本机环境约定」）。
-2. 文生图模板（三选一在场即可，互不依赖）：
+2. 文生图模板（二选一在场即可，互不依赖；共用 `text_encoders/qwen_3_4b.safetensors`）：
    - **Z-Image Turbo**（推荐，T4/Turing 可用）：`diffusion_models/z_image_turbo_bf16.safetensors`（12.3G）+
-     `text_encoders/qwen_3_4b.safetensors`（8.0G，与 klein 共用）+ `vae/ae.safetensors`（0.34G），
+     `text_encoders/qwen_3_4b.safetensors`（8.0G）+ `vae/ae.safetensors`（0.34G），
      仓库 `Comfy-Org/z_image_turbo`
    - **FLUX.2 klein 4B**：`diffusion_models/flux-2-klein-4b.safetensors`（7.8G）+
      `text_encoders/qwen_3_4b.safetensors` + `vae/flux2-vae.safetensors`（0.34G），
      仓库 `Comfy-Org/flux2-klein-4B`
-   - **Qwen-Image 2.1 Turbo**：`diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors` +
-     `text_encoders/qwen3vl_8b_w4a8.safetensors`（或 int8_convrot）+ `vae/qwen_image_2.1_vae_bf16.safetensors`。
-     **仅限驱动 ≥580（CUDA 13）的机器**——int8_convrot/w4a8 量化走 comfy-kitchen 的 CUDA13 内核，
-     驱动 550（如本机 T4）会报 "CUDA driver version is insufficient"
 3. 以上模型均可用 `uv run scripts/download_models.py` 从 ModelScope 自动下载到引擎 models/ 对应目录。
 
 ## 启动
@@ -56,19 +52,14 @@ cd backend && uv run pytest -q        # 离线单测（假引擎）
 
 ## M1 边界
 
-单槽队列、文生图模板（Qwen-Image 2.1 Turbo）、HMAC 认证与多用户隔离、WS 进度事件、产物按用户落盘 `data/users/{uid}/outputs/{job_id}/`。
-**M2 进行中**：LTX-2.3 图生视频模板（音视频联合生成，unsloth GGUF 配方）、图片上传（`POST /api/uploads`，落引擎 `input/` 目录）、视频产物预览。
+单槽队列、HMAC 认证与多用户隔离、WS 进度事件、产物按用户落盘 `data/users/{uid}/outputs/{job_id}/`。
+**M2 进行中**：图生视频（LTX-2B / HunyuanVideo 1.5）、文生视频（Wan 1.3B）、图片上传（`POST /api/uploads`，落引擎 `input/` 目录）、视频产物预览。
 多步 DSL 链、显存 Profile、Agent、加密狗 → M2+（见设计文档 §8）。
 
-### LTX-2.3 图生视频前置（GGUF 路线）
+## 模板与前置模型
 
-- `diffusion_models/ltx-2.3-22b-dev-Q3_K_S.gguf`（unsloth）
-- `text_encoders/gemma-3-12b-it-qat-UD-Q4_K_XL.gguf`
-  `https://hf-mirror.com/unsloth/gemma-3-12b-it-qat-GGUF/resolve/main/gemma-3-12b-it-qat-UD-Q4_K_XL.gguf`
-- `text_encoders/ltx-2.3-22b-dev_embeddings_connectors.safetensors`（unsloth）
-- `vae/ltx-2.3-22b-dev_video_vae.safetensors`、`vae/ltx-2.3-22b-dev_audio_vae.safetensors`
-- 文本编码器经 `DualCLIPLoaderGGUF(type=ltxv)` 加载——需引擎以**较新代码**启动（ComfyUI 核心 v0.39+ 的 `DualCLIPLoader` type 枚举含 ltxv；若引擎启动过早需重启进程）
-- 本机 ComfyUI-GGUF 有本地补丁（qwen3vl mmproj 合并支持），已提交到其本地 git 分支，更新该节点仓库时注意保留
+当前 5 个模板：文生图（z-image-turbo / flux2-klein-4b）、图生视频（ltx-2b-i2v-distilled / hy15-480p-i2v-step-distilled）、文生视频（wan-2.1-1.3b-t2v）。
+历史模板 Qwen-Image 2.1 Turbo 与 LTX-2.3 i2v 已移除（前者受 CUDA13 内核约束、后者 22B 在 T4 不可行）。
 
 ### LTX-Video 2B 蒸馏版 前置（低显存档）
 
@@ -83,9 +74,10 @@ cd backend && uv run pytest -q        # 离线单测（假引擎）
 - `vae/wan_2.1_vae.safetensors`（0.24G）
 - 仓库：`Comfy-Org/Wan_2.1_ComfyUI_repackaged` 的 `split_files/` 对应子目录
 
-### FastHunyuan 文生视频 前置（720p 6步蒸馏）
+### HunyuanVideo 1.5 图生视频 前置（480p step 蒸馏，T4 可用档）
 
-- `diffusion_models/fast-hunyuan-video-t2v-720p-Q3_K_S.gguf`（city96/FastHunyuan-gguf，5.7G）
-- `text_encoders/llava_llama3_fp8_scaled.safetensors` + `text_encoders/clip_l.safetensors`（Comfy-Org/HunyuanVideo_repackaged；双编码器经 `DualCLIPLoader(type=hunyuan_video)`）
-- `vae/hunyuan_video_vae_bf16.safetensors`（同上仓库，0.46G）
-- 官方推荐参数已内置：6 步 / shift 17 / CFG 7 / 1280×720×125 帧
+- `diffusion_models/hunyuanvideo1.5_480p_i2v_step_distilled_fp8_scaled.safetensors`（8.3G）
+- `text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors`（9.4G）+ `text_encoders/byt5_small_glyphxl_fp16.safetensors`（0.44G）
+- `vae/hunyuanvideo15_vae_fp16.safetensors`（2.5G）、`clip_vision/sigclip_vision_patch14_384.safetensors`（0.86G）
+- 仓库：`Comfy-Org/HunyuanVideo_1.5_repackaged` 的 `split_files/` 对应子目录
+- step 蒸馏 CFG=1、8~12 步；720p / cfg_distilled（50 步）/ SR 精修档在 T4 上按小时计，不部署

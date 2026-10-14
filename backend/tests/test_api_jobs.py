@@ -23,16 +23,10 @@ def test_templates_endpoint(client):
     r = client.get("/api/templates")
     assert r.status_code == 200
     data = r.json()
-    assert len(data) == 7
+    assert len(data) == 5
     by_id = {t["id"]: t for t in data}
-    qwen = by_id["qwen-image-2.1-turbo"]
-    assert qwen["defaults"]["width"] == 1024
-    assert qwen["defaults"]["prompt"] is None
-    assert qwen["missing_models"] == []
-    assert qwen["missing_optional_models"] == []      # LoRA 已移除，无可选缺失
-    ltx = by_id["ltx-2.3-i2v"]
-    assert ltx["capability"] == "image-to-video"
     ltx2b = by_id["ltx-2b-i2v-distilled"]
+    assert ltx2b["capability"] == "image-to-video"
     assert ltx2b["missing_models"] == []
     assert ltx2b["defaults"]["steps"] == 8 and ltx2b["defaults"]["cfg"] == 1.0
     wan = by_id["wan-2.1-1.3b-t2v"]
@@ -44,6 +38,7 @@ def test_templates_endpoint(client):
     assert hy15["defaults"]["steps"] == 10
     zi = by_id["z-image-turbo"]
     assert zi["capability"] == "text-to-image" and zi["missing_models"] == []
+    assert zi["defaults"]["width"] == 1024 and zi["defaults"]["prompt"] is None
     kl = by_id["flux2-klein-4b"]
     assert kl["capability"] == "text-to-image" and kl["missing_models"] == []
 
@@ -52,7 +47,7 @@ def test_submit_and_isolation(client):
     h1 = _login(client, "student1")
     h2 = _login(client, "student2")
     r = client.post("/api/jobs", headers=h1,
-                    json={"template_id": "qwen-image-2.1-turbo",
+                    json={"template_id": "z-image-turbo",
                           "params": {"prompt": "cat"}})
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "QUEUED"
@@ -78,7 +73,7 @@ def test_admin_sees_all(client):
     ha = _login(client, "admin", "admin123")
     _login(client, "student1")
     client.post("/api/jobs", headers=ha,
-                json={"template_id": "qwen-image-2.1-turbo",
+                json={"template_id": "z-image-turbo",
                       "params": {"prompt": "x"}})
     assert len(client.get("/api/jobs", headers=ha).json()) == 1
 
@@ -86,7 +81,7 @@ def test_admin_sees_all(client):
 def test_submit_bad_params(client):
     h = _login(client)
     r = client.post("/api/jobs", headers=h,
-                    json={"template_id": "qwen-image-2.1-turbo",
+                    json={"template_id": "z-image-turbo",
                           "params": {"prompt": "x", "width": 100}})
     assert r.status_code == 422
     r = client.post("/api/jobs", headers=h,
@@ -94,8 +89,8 @@ def test_submit_bad_params(client):
     assert r.status_code == 404
     # LTX 缺 image 参数 → 422
     r = client.post("/api/jobs", headers=h,
-                    json={"template_id": "ltx-2.3-i2v", "params": {"prompt": "x"}})
-    assert r.status_code == 422
+                    json={"template_id": "hy15-480p-i2v-step-distilled", "params": {"prompt": "x"}})
+    assert r.status_code == 422  # 图生视频缺 image 参数
 
 
 def test_cancel_queued(client):
@@ -103,7 +98,7 @@ def test_cancel_queued(client):
     # 提交两个：第一个会被立刻执行，第二个排队
     for _ in range(2):
         client.post("/api/jobs", headers=ha,
-                    json={"template_id": "qwen-image-2.1-turbo",
+                    json={"template_id": "z-image-turbo",
                           "params": {"prompt": "x"}})
     second = client.get("/api/jobs", headers=ha).json()[0]["id"]  # desc 序，最新的是第二个
     r = client.post(f"/api/jobs/{second}/cancel", headers=ha)

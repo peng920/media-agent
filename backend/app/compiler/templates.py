@@ -4,47 +4,6 @@ from collections.abc import Callable
 from pydantic import BaseModel, Field, field_validator
 
 
-class QwenT2IParams(BaseModel):
-    prompt: str = Field(min_length=1, max_length=4000)
-    width: int = Field(default=1024, ge=256, le=2048, multiple_of=32)
-    height: int = Field(default=1024, ge=256, le=2048, multiple_of=32)
-    steps: int = Field(default=6, ge=1, le=50)
-    seed: int | None = None
-
-
-# 2026-10-12 真机校准结论：qwen_image_2.1_turbo 需 4096 维文本特征（qwen3vl_8b），
-# 盘上 qwen3vl_4b（2560 维）会报 normalized_shape 不匹配。
-# 8B 编码器接受任一官方量化变体，按显存占用从省到奢排序。
-UNET = "qwen_image_2.1_turbo_int8_convrot.safetensors"
-TE_CANDIDATES = [
-    "qwen3vl_8b_w4a8.safetensors",
-    "qwen3vl_8b_int8_convrot.safetensors",
-    "qwen3vl_8b_bf16.safetensors",
-]
-VAE = "qwen_image_2.1_vae_bf16.safetensors"
-
-
-def build_qwen_t2i(p: QwenT2IParams, overrides: dict | None = None) -> dict:
-    seed = p.seed if p.seed is not None else random.randint(0, 2**48)
-    te = (overrides or {}).get("clip_name", TE_CANDIDATES[0])
-    return {
-        "1": {"class_type": "UNETLoader",
-              "inputs": {"unet_name": UNET, "weight_dtype": "default"}},
-        "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": te, "type": "qwen_image"}},
-        "3": {"class_type": "VAELoader", "inputs": {"vae_name": VAE}},
-        "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": p.prompt}},
-        "6": {"class_type": "EmptySD3LatentImage",
-              "inputs": {"width": p.width, "height": p.height, "batch_size": 1}},
-        "7": {"class_type": "KSampler",
-              "inputs": {"model": ["1", 0], "positive": ["5", 0], "negative": ["5", 0],
-                         "latent_image": ["6", 0], "seed": seed, "steps": p.steps,
-                         "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple",
-                         "denoise": 1.0}},
-        "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["3", 0]}},
-        "9": {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "filename_prefix": "zimg"}},
-    }
-
-
 class Template:
     """required_models/optional_models：[(node, field, 文件名或候选列表)， ...]
     条目列表形式允许同一节点同一字段出现多次（如双 VAE）。"""
@@ -62,31 +21,6 @@ class Template:
 
     async def resolve_overrides(self, engine) -> dict:
         return await self._resolver(engine) if self._resolver else {}
-
-
-async def _resolve_te(engine) -> dict:
-    opts = await engine.model_options("CLIPLoader", "clip_name")
-    for cand in TE_CANDIDATES:
-        if cand in opts:
-            return {"clip_name": cand}
-    raise RuntimeError(
-        "缺少 Qwen-Image 2.1 文本编码器（qwen3vl_8b_w4a8 / int8_convrot / bf16 任一），"
-        "请放入 engine 的 text_encoders 目录")
-
-
-QWEN_T2I = Template(
-    id="qwen-image-2.1-turbo",
-    name="Qwen-Image 2.1 Turbo 文生图",
-    capability="text-to-image",
-    params_model=QwenT2IParams,
-    builder=build_qwen_t2i,
-    required_models=[
-        ("UNETLoader", "unet_name", UNET),
-        ("CLIPLoader", "clip_name", TE_CANDIDATES),
-        ("VAELoader", "vae_name", VAE),
-    ],
-    resolver=_resolve_te,
-)
 
 
 async def _check_group(engine, entries: list) -> list[str]:
@@ -115,118 +49,7 @@ async def validate_models(engine, tpl=None) -> dict:
     return {"required": required, "optional": optional}
 
 
-# ============ LTX-2.3 图生视频（音视频联合，unsloth GGUF 配方） ============
-
-class LtxI2VParams(BaseModel):
-    prompt: str = Field(min_length=1, max_length=8000)
-    image: str = Field(min_length=1)  # 引擎 input 目录里的文件名（经 /api/uploads 上传）
-    width: int = Field(default=768, ge=256, le=1920, multiple_of=32)
-    height: int = Field(default=512, ge=256, le=1920, multiple_of=32)
-    length: int = Field(default=25, ge=9, le=121)        # 帧数，8n+1
-    steps: int = Field(default=20, ge=1, le=60)
-    cfg: float = Field(default=3.0, ge=1.0, le=10.0)     # dev 模型非蒸馏，需 CFG
-    fps: float = Field(default=24.0, ge=8.0, le=60.0)
-    seed: int | None = None
-
-    @field_validator("length")
-    @classmethod
-    def _length_8n1(cls, v: int) -> int:
-        if (v - 1) % 8 != 0:
-            raise ValueError("帧数须为 8n+1（如 25/49/97）")
-        return v
-
-LTX_GGUF = "ltx-2.3-22b-dev-Q3_K_S.gguf"
-EMB_CONN = "ltx-2.3-22b-dev_embeddings_connectors.safetensors"
-LTX_VIDEO_VAE = "ltx-2.3-22b-dev_video_vae.safetensors"
-LTX_AUDIO_VAE = "ltx-2.3-22b-dev_audio_vae.safetensors"
-GEMMA_CANDIDATES = [
-    "gemma-3-12b-it-qat-UD-Q4_K_XL.gguf",
-    "gemma-3-12b-it-qat-UD-Q3_K_XL.gguf",
-    "gemma-3-12b-it-qat-Q4_K_M.gguf",
-    "gemma-3-12b-it-qat-Q5_K_M.gguf",
-    "gemma-3-12b-it-qat-Q8_0.gguf",
-]
-LTX_NEGATIVE = ("blurry, low quality, still frame, frames, watermark, overlay, "
-                "titles, has blurbox, has subtitles")
-
-
-def build_ltx_i2v(p: LtxI2VParams, overrides: dict | None = None) -> dict:
-    ov = overrides or {}
-    gemma = ov.get("clip_name1", GEMMA_CANDIDATES[0])
-    seed = p.seed if p.seed is not None else random.randint(0, 2**48)
-    return {
-        "1": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": LTX_GGUF}},
-        "2": {"class_type": "DualCLIPLoaderGGUF",
-              "inputs": {"clip_name1": gemma, "clip_name2": EMB_CONN, "type": "ltxv"}},
-        "3": {"class_type": "VAELoaderKJ",
-              "inputs": {"vae_name": LTX_VIDEO_VAE, "device": "main_device", "weight_dtype": "bf16"}},
-        "4": {"class_type": "VAELoaderKJ",
-              "inputs": {"vae_name": LTX_AUDIO_VAE, "device": "main_device", "weight_dtype": "bf16"}},
-        "5": {"class_type": "LoadImage", "inputs": {"image": p.image}},
-        "6": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": p.prompt}},
-        "7": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": LTX_NEGATIVE}},
-        "8": {"class_type": "LTXVConditioning",
-              "inputs": {"positive": ["6", 0], "negative": ["7", 0], "frame_rate": p.fps}},
-        "9": {"class_type": "LTXVImgToVideo",
-              "inputs": {"positive": ["8", 0], "negative": ["8", 1], "vae": ["3", 0],
-                         "image": ["5", 0], "width": p.width, "height": p.height,
-                         "length": p.length, "batch_size": 1, "strength": 1.0}},
-        "10": {"class_type": "EmptyLTXVLatentVideo",
-               "inputs": {"width": p.width, "height": p.height, "length": p.length, "batch_size": 1}},
-        "11": {"class_type": "LTXVEmptyLatentAudio",
-               "inputs": {"frames_number": p.length, "frame_rate": p.fps,
-                          "batch_size": 1, "audio_vae": ["4", 0]}},
-        "12": {"class_type": "LTXVConcatAVLatent",
-               "inputs": {"video_latent": ["10", 0], "audio_latent": ["11", 0]}},
-        "13": {"class_type": "LTXVScheduler",
-               "inputs": {"steps": p.steps, "max_shift": 2.05, "base_shift": 0.95,
-                          "stretch": True, "terminal": 0.1}},
-        "14": {"class_type": "CFGGuider",
-               "inputs": {"model": ["1", 0], "positive": ["9", 0], "negative": ["9", 1], "cfg": p.cfg}},
-        "15": {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}},
-        "16": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler_ancestral"}},
-        "17": {"class_type": "SamplerCustomAdvanced",
-               "inputs": {"noise": ["15", 0], "guider": ["14", 0], "sampler": ["16", 0],
-                          "sigmas": ["13", 0], "latent_image": ["12", 0]}},
-        "18": {"class_type": "LTXVSeparateAVLatent", "inputs": {"av_latent": ["17", 0]}},
-        "19": {"class_type": "VAEDecodeTiled",
-               "inputs": {"samples": ["18", 0], "vae": ["3", 0], "tile_size": 512,
-                          "overlap": 64, "temporal_size": 4096, "temporal_overlap": 8}},
-        "20": {"class_type": "LTXVAudioVAEDecode", "inputs": {"samples": ["18", 1], "audio_vae": ["4", 0]}},
-        "21": {"class_type": "CreateVideo",
-               "inputs": {"images": ["19", 0], "fps": p.fps, "audio": ["20", 0]}},
-        "22": {"class_type": "SaveVideo",
-               "inputs": {"video": ["21", 0], "filename_prefix": "zimg", "format": "mp4",
-                          "codec": "auto"}},
-    }
-
-
-async def _resolve_gemma(engine) -> dict:
-    opts = await engine.model_options("DualCLIPLoaderGGUF", "clip_name1")
-    for cand in GEMMA_CANDIDATES:
-        if cand in opts:
-            return {"clip_name1": cand}
-    raise RuntimeError("缺少 LTX 文本编码器 gemma-3-12b-it-qat（UD-Q4_K_XL 推荐），"
-                       "请放入 engine 的 text_encoders 目录")
-
-
-LTX_I2V = Template(
-    id="ltx-2.3-i2v",
-    name="LTX-2.3 图生视频（含音频）",
-    capability="image-to-video",
-    params_model=LtxI2VParams,
-    builder=build_ltx_i2v,
-    required_models=[
-        ("UnetLoaderGGUF", "unet_name", LTX_GGUF),
-        ("DualCLIPLoaderGGUF", "clip_name1", GEMMA_CANDIDATES),
-        ("DualCLIPLoaderGGUF", "clip_name2", EMB_CONN),
-        ("VAELoaderKJ", "vae_name", LTX_VIDEO_VAE),
-        ("VAELoaderKJ", "vae_name", LTX_AUDIO_VAE),
-    ],
-    resolver=_resolve_gemma,
-)
-
-TEMPLATES: dict[str, Template] = {QWEN_T2I.id: QWEN_T2I, LTX_I2V.id: LTX_I2V}
+TEMPLATES: dict[str, Template] = {}
 
 
 # ============ LTX-Video 2B 0.9.6 distilled 图生视频（低显存档，无音频） ============
@@ -438,7 +261,6 @@ WAN_T2V = Template(
     resolver=_resolve_wan,
 )
 TEMPLATES[WAN_T2V.id] = WAN_T2V
-
 
 
 # ============ HunyuanVideo 1.5 480p i2v（step 蒸馏档，T4 可用） ============

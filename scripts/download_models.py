@@ -13,8 +13,7 @@
 约定：
 - 已存在且大小与远端一致的文件自动跳过（可断点续跑）。
 - 下载经 modelscope snapshot_download 完成（国内源，无需 HF）。
-- LTX-2.3（ltx-2.3-i2v 模板，22B dev 档）按决定不下，其 5 个文件不在清单里；
-  若日后要启用，参考 docs/HANDOFF.md §5 与 backend README 补齐。
+- 历史组 qwen-t2i / ltx-2.3 / fasthy 已随模板移除；相关已下载文件如需腾空间可手动删除。
 """
 from __future__ import annotations
 
@@ -29,21 +28,6 @@ from pathlib import Path
 # Lightricks 仓库的 vae/diffusion_pytorch_model.safetensors 已被替换为 LTX 2.x
 # 新格式，与 0.9.x DiT 不兼容；旧 VAE 只能从 0.9.5 checkpoint 抽取）
 MANIFEST: list[tuple] = [
-    # ---- qwen-t2i：Qwen-Image 2.1 Turbo（turbo 裸跑，不用 LoRA）----
-    ("qwen-t2i", "Comfy-Org/Qwen-Image-2.1",
-     "diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors",
-     "diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors"),
-    ("qwen-t2i", "Comfy-Org/Qwen-Image-2.1",
-     "text_encoders/qwen3vl_8b_w4a8.safetensors",
-     "text_encoders/qwen3vl_8b_w4a8.safetensors"),
-    # T4(Turing) 上 w4a8 若不可加载，模板 resolver 会自动改用 int8_convrot，
-    # 备一份在场可免去现场重下
-    ("qwen-t2i", "Comfy-Org/Qwen-Image-2.1",
-     "text_encoders/qwen3vl_8b_int8_convrot.safetensors",
-     "text_encoders/qwen3vl_8b_int8_convrot.safetensors"),
-    ("qwen-t2i", "Comfy-Org/Qwen-Image-2.1",
-     "vae/qwen_image_2.1_vae_bf16.safetensors",
-     "vae/qwen_image_2.1_vae_bf16.safetensors"),
     # ---- ltx-2b：LTX-Video 2B 蒸馏版（低显存档，标书"6GB 跑基础视频模型"）----
     ("ltx-2b", "Lightricks/LTX-Video",
      "ltxv-2b-0.9.6-distilled-04-25.safetensors",
@@ -106,7 +90,6 @@ MANIFEST: list[tuple] = [
 ]
 
 GROUP_LABELS = {
-    "qwen-t2i": "Qwen-Image 2.1 Turbo 文生图（含 int8 编码器备份）",
     "ltx-2b": "LTX-Video 2B 蒸馏版 图生视频（低显存档）",
     "wan-t2v": "Wan 2.1 1.3B 文生视频 480p",
     "hy15": "HunyuanVideo 1.5 480p 图生视频（step 蒸馏，T4 可用）",
@@ -191,7 +174,7 @@ def main() -> int:
     ap.add_argument("--models-dir", default="/data/ComfyUI/models",
                     help="ComfyUI models 目录（默认 /data/ComfyUI/models）")
     ap.add_argument("--list", action="store_true", help="只列出清单与缺失状态")
-    ap.add_argument("--only", help="只下载指定组（逗号分隔，如 qwen-t2i,fasthy）")
+    ap.add_argument("--only", help="只下载指定组（逗号分隔，如 zimage,hy15）")
     ap.add_argument("--skip", help="跳过指定组（逗号分隔）")
     args = ap.parse_args()
 
